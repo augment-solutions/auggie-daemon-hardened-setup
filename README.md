@@ -8,7 +8,7 @@ Why: by default the daemon runs with the full OS permissions of whoever launches
 |---|---|---|
 | macOS | `setup-auggie-daemon-macos.sh` | LaunchDaemon (hidden service user) |
 | Linux / WSL2 | `setup-auggie-daemon-linux.sh` | Hardened systemd unit (`ProtectHome`, `ProtectSystem=strict`) |
-| Windows (native) | `setup-auggie-daemon-windows.ps1` | Scheduled Task as a local service account |
+| Windows (native) | `setup-auggie-daemon-windows.ps1` | Your choice at onboarding: Scheduled Task (default) or Windows Service via WinSW - both as a local service account |
 
 On Windows, **WSL2 + the Linux script is the recommended path** (WSL is the officially supported Windows platform for the CLI, and the systemd sandboxing is the strongest boundary). The native PowerShell script is for hosts where WSL isn't an option.
 
@@ -22,7 +22,7 @@ On Windows, **WSL2 + the Linux script is the recommended path** (WSL is the offi
 The `session.json` downloads via browser on the admin's machine. It is a bearer credential; treat it like a password:
 
 - **Preferred:** copy it over an authenticated channel: `scp session.json admin@daemonhost:/tmp/` then run the installer pointing at that path. The installer moves it into place with owner-only permissions and you should **delete the original** afterward (`rm` / secure-delete on both the download folder and `/tmp`).
-- **Alternative:** run the installer and choose the **paste option**. Input is hidden, written straight to the final location with `0600`/restricted ACL, and never stored elsewhere.
+- **Alternative:** run the installer and choose the **paste option**. Input is hidden, the pretty-printed multi-line `session.json` can be pasted as-is (capture ends automatically at the closing brace), and it is written straight to the final location with `0600`/restricted ACL, never stored elsewhere.
 - **Never** email it, put it in chat, commit it, or place it in a shared drive. If it may have been exposed, revoke the token in the Service Accounts page and issue a new one.
 
 The scripts validate the JSON before installing: it must contain `accessToken`, `tenantURL`, **and** `scopes` as an array. A missing `scopes` array is silently rejected by the CLI and is the single most common cause of "auth worked yesterday" failures.
@@ -34,8 +34,9 @@ The scripts validate the JSON before installing: it must contain `accessToken`, 
 chmod +x setup-auggie-daemon-macos.sh
 sudo ./setup-auggie-daemon-macos.sh
 # non-interactive:
-sudo POOL_ID=pool-xxxx SESSION_JSON_PATH=/tmp/session.json REPO_URL=git@github.com:org/repo.git \
-  ./setup-auggie-daemon-macos.sh
+sudo POOL_ID=pool-xxxx SESSION_JSON_PATH=/tmp/session.json \
+  WORKSPACE_SRC=git@github.com:org/repo.git EXTRA_WORKSPACES="/path/to/local-repo,git@github.com:org/repo2.git" \
+  MAX_AGENTS=4 ./setup-auggie-daemon-macos.sh   # MAX_AGENTS="" keeps the daemon default (100)
 ```
 
 ### Linux / WSL2
@@ -43,7 +44,8 @@ sudo POOL_ID=pool-xxxx SESSION_JSON_PATH=/tmp/session.json REPO_URL=git@github.c
 chmod +x setup-auggie-daemon-linux.sh
 sudo ./setup-auggie-daemon-linux.sh
 # hardening levels: HARDENING=strict (default) | full | off
-sudo POOL_ID=pool-xxxx SESSION_JSON_PATH=/tmp/session.json HARDENING=strict ./setup-auggie-daemon-linux.sh
+sudo POOL_ID=pool-xxxx SESSION_JSON_PATH=/tmp/session.json HARDENING=strict \
+  WORKSPACE_SRC=git@github.com:org/repo.git MAX_AGENTS=4 ./setup-auggie-daemon-linux.sh
 ```
 WSL2 note: enable systemd first (`/etc/wsl.conf` → `[boot]\nsystemd=true`, then `wsl --shutdown`).
 
@@ -53,17 +55,20 @@ WSL2 note: enable systemd first (`/etc/wsl.conf` → `[boot]\nsystemd=true`, the
 Set-ExecutionPolicy -Scope Process Bypass
 .\setup-auggie-daemon-windows.ps1
 # non-interactive:
-.\setup-auggie-daemon-windows.ps1 -PoolId pool-xxxx -SessionJson C:\tmp\session.json -RepoUrl https://github.com/org/repo.git
+.\setup-auggie-daemon-windows.ps1 -PoolId pool-xxxx -SessionJson C:\tmp\session.json `
+  -RepoUrl https://github.com/org/repo.git -RunMode task -MaxAgents 4
+# -RunMode task|service (service = WinSW, visible in services.msc); -MaxAgents 0 keeps the daemon default (100)
+# -ExtraWorkspaces @("C:\path\to\local-repo","https://github.com/org/repo2.git") for multi-repo
 ```
 
 ## What every script does
 
-1. Preflight: Node 22+ (20 minimum), git, auggie CLI (Windows enforces >= 0.28.0).
-2. Prompts for pool ID, credential (path or hidden paste), and repo URL, all overridable via env vars/parameters for unattended installs.
-3. Creates the locked-down account: hidden non-admin user (macOS), `--system` account with `nologin` and home outside `/home` (Linux), non-admin local user with batch-logon right (Windows).
-4. Installs auggie under the service account's own npm prefix (macOS/Linux) or globally (Windows), clones your repo as the workspace (or creates a git sandbox so worktrees function).
+1. Preflight: Node 22+ (20 minimum) and git.
+2. Prompts for pool ID, credential (path or hidden multi-line paste), max agents (Enter = daemon default), one or more workspaces (git URL / local path / sandbox), and on Windows the run mode (Scheduled Task or Windows Service). All overridable via env vars/parameters for unattended installs.
+3. Creates the locked-down account: hidden non-admin user with a dedicated primary group (macOS), `--system` account with `nologin` and home outside `/home` (Linux), non-admin local user with batch + service logon rights (Windows).
+4. Installs auggie where the service account can execute it: under its own npm prefix (macOS/Linux) or inside the ACL'd `C:\augment\npm` tree (Windows - a per-user npm install under the admin's profile is unreachable by the service account and fails; Windows enforces auggie >= 0.28.0). Clones/copies your workspaces (or creates a git sandbox so worktrees function).
 5. Installs the credential at the service account's `~/.augment/session.json` (macOS/Linux) or via `--augment-session-json` (Windows), locked to owner-only.
-6. Registers the always-on service wrapper and waits for the daemon to report CONNECTED.
+6. Registers the always-on wrapper (LaunchDaemon / systemd / Scheduled Task or WinSW service) and waits for real pool **registration** in the logs (macOS/Linux) or the daemon process running as the service account (Windows) - a mere websocket handshake is not treated as success, and known Cosmos rejections are diagnosed in plain English.
 7. Runs the validation suite and prints PASS/FAIL:
    - account is non-admin, hidden, no interactive shell
    - cannot read any other user's home/profile; cannot write outside its tree; can write inside the workspace
@@ -81,17 +86,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ## Tuning
 
-- `MAX_AGENTS` (default 4): each concurrent session can use 0.5 to 2 GB RAM; keep 4-5 on an 8-16 GB host and archive completed sessions in Cosmos to reclaim memory.
+- `MAX_AGENTS` (default: the daemon's own 100 slots when left blank): each concurrent session can use 0.5 to 2 GB RAM, so set 4-5 on an 8-16 GB host and archive completed sessions in Cosmos to reclaim memory. Leave blank only on hosts sized for it.
 - Linux `HARDENING=strict` makes the whole filesystem read-only to agents outside `/srv/augment`. If a workflow legitimately needs other paths, add `ReadWritePaths=` lines to the unit or use `HARDENING=full`.
 - Never point `--workspace` at the account's home directory itself; indexing is blocked there and pool sessions will fail to start.
 - Keep the CLI updated on the host (`npm update -g @augmentcode/auggie`); long-running daemons don't auto-update.
-
-## Field-testing notes (v1.1)
-
-- **macOS group fix:** the service account gets its own dedicated primary group and is removed from `staff`. macOS home directories are group `staff` by default, so a `staff`-member service account could list any home directory set to 750. With the dedicated group, only `chmod 700`-level privacy is assumed of no one; the validator now recommends `chmod 700` on any home directory it can still read.
-- **Loopback listeners are normal:** the daemon (Node) may open local `127.0.0.1` ports for internal IPC. These are not reachable from the network. All three validators now fail only on non-loopback (`0.0.0.0` / LAN-bound) listeners and report loopback listeners as informational.
-
-- **Run-from-anywhere fix (v1.2):** commands executed as the service account now `cd` into its own home first. Previously, running the installer from inside a `chmod 700` home directory made npm crash as the service user (`EACCES uv_cwd`), because child processes inherited an unreadable working directory.
 
 ## Validated environments and support status
 
@@ -132,7 +130,7 @@ Every configuration below was executed end to end against a **live Cosmos daemon
 
 ## Version history
 
-All findings below came from real installs on macOS (validated end to end against a live Cosmos pool), and every fix applies to the corresponding scripts.
+Every finding below came from real installs during field testing on macOS, Ubuntu, and Windows Server - all validated end to end against a live Cosmos pool. Nine real defects were caught this way; each entry names the failure and the fix.
 
 **v2.3.2 - Service logon fix: SYSTEM escalation caught by validation** (Windows)
 - Field testing caught the service running as **LocalSystem**: WinSW v2 and v3 use different `serviceaccount` schemas, and a v3-style block is silently ignored by v2.12, defaulting the service to SYSTEM. The validation suite's process-owner check flagged it immediately.
@@ -183,7 +181,7 @@ All findings below came from real installs on macOS (validated end to end agains
 ```bash
 sudo ./setup-auggie-daemon-macos.sh --uninstall     # macOS
 sudo ./setup-auggie-daemon-linux.sh --uninstall     # Linux
-.\setup-auggie-daemon-windows.ps1 -Uninstall        # Windows
+.\setup-auggie-daemon-windows.ps1 -Uninstall        # Windows (removes the task or the service)
 ```
 
 ## Disclaimer
