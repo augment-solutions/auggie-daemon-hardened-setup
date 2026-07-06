@@ -109,6 +109,10 @@ Not yet field-tested: WSL2 + the Linux script (the officially supported Windows 
 
 All findings below came from real installs on macOS (validated end to end against a live Cosmos pool), and every fix applies to the corresponding scripts.
 
+**v2.3.2 - Service logon fix: SYSTEM escalation caught by validation** (Windows)
+- Field testing caught the service running as **LocalSystem**: WinSW v2 and v3 use different `serviceaccount` schemas, and a v3-style block is silently ignored by v2.12, defaulting the service to SYSTEM. The validation suite's process-owner check flagged it immediately.
+- Fix: credentials are no longer placed in the WinSW XML at all. The logon account is set via `sc.exe config` after install (with `SeServiceLogonRight` granted alongside the batch right), and the installer now verifies the service's actual StartName before declaring success. The password never touches disk.
+
 **v2.3.1 - Service wrapper switched to WinSW** (Windows)
 - nssm.cc (a single-maintainer host) returned 503 during field testing; the service mode now uses WinSW v2.12.0 from official GitHub releases instead (github.com/winsw/winsw, MIT, actively maintained). The account password is required only at install time and is scrubbed from the on-disk config immediately after the SCM stores the credential.
 

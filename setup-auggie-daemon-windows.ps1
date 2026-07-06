@@ -154,16 +154,18 @@ $sid = (Get-LocalUser $SvcUser).SID.Value
 $inf = Join-Path $env:TEMP "auggie-rights.inf"; $sdb = Join-Path $env:TEMP "auggie-rights.sdb"
 secedit /export /cfg $inf /quiet
 $cfg = Get-Content $inf
-$line = $cfg | Where-Object { $_ -match "^SeBatchLogonRight" }
-if ($line -and $line -notmatch [regex]::Escape($sid)) {
-  $cfg = $cfg -replace "^SeBatchLogonRight\s*=\s*(.*)$", ('SeBatchLogonRight = $1,*' + $sid)
-} elseif (-not $line) {
-  $cfg += "SeBatchLogonRight = *$sid"
+foreach ($right in @("SeBatchLogonRight","SeServiceLogonRight")) {
+  $line = $cfg | Where-Object { $_ -match "^$right" }
+  if ($line -and $line -notmatch [regex]::Escape($sid)) {
+    $cfg = $cfg -replace "^$right\s*=\s*(.*)$", ($right + ' = $1,*' + $sid)
+  } elseif (-not $line) {
+    $cfg += "$right = *$sid"
+  }
 }
 $cfg | Set-Content $inf
 secedit /configure /db $sdb /cfg $inf /areas USER_RIGHTS /quiet
 Remove-Item $inf,$sdb -ErrorAction SilentlyContinue
-OK "granted 'Log on as a batch job'"
+OK "granted 'Log on as a batch job' + 'Log on as a service'"
 
 # ---------- directories + ACLs ----------
 Info "Preparing $Root with a tight, non-inherited ACL"
@@ -274,7 +276,11 @@ if ($RunMode -eq "task") {
   icacls $SvcDir /inheritance:r | Out-Null
   icacls $SvcDir /grant "${SvcUser}:(OI)(CI)RX" "Administrators:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
 
-  # Config WITH password (needed only at install; scrubbed immediately after)
+  # Service config: NO credentials in the XML. WinSW v2 and v3 use different
+  # serviceaccount schemas (a v3-style block is silently ignored by v2 and the
+  # service lands on LocalSystem - caught by the validation suite in field
+  # testing). The logon account is set deterministically via sc.exe instead,
+  # so the password never touches disk at all.
   $xmlEsc = { param($t) $t -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;' }
   $svcXml = @"
 <service>
@@ -284,11 +290,6 @@ if ($RunMode -eq "task") {
   <executable>%SystemRoot%\System32\cmd.exe</executable>
   <arguments>/c ""$AuggieCmd" $(& $xmlEsc $argsLine)"</arguments>
   <workingdirectory>$RepoDir</workingdirectory>
-  <serviceaccount>
-    <username>$UserAccount</username>
-    <password>$(& $xmlEsc $pwPlain)</password>
-    <allowservicelogon>true</allowservicelogon>
-  </serviceaccount>
   <startmode>Automatic</startmode>
   <onfailure action="restart" delay="5 sec"/>
   <logpath>$Root</logpath>
@@ -298,16 +299,18 @@ if ($RunMode -eq "task") {
   try {
     Set-Content -Path $WinswXml -Value $svcXml -Encoding UTF8
     & $WinswExe install | Out-Null
-    # Scrub the password from disk: the SCM has stored the credential; WinSW only
-    # reads serviceaccount at install time.
-    $svcXml = $svcXml -replace "(?s)<password>.*?</password>\s*", ""
-    Set-Content -Path $WinswXml -Value $svcXml -Encoding UTF8
+    # Set the logon account via SCM directly (note: the space after obj= / password= is required)
+    $scOut = sc.exe config $TaskName obj= $UserAccount password= $pwPlain
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe config failed: $scOut" }
     $pwPlain = $null
     & $WinswExe start | Out-Null
     Start-Sleep 3
     $svc = Get-Service $TaskName -ErrorAction Stop
     if ($svc.Status -ne "Running") { throw "service state: $($svc.Status)" }
-    OK "Windows Service '$TaskName' installed and running (as $UserAccount) - visible in services.msc"
+    # Verify the logon account actually took (the exact failure field testing caught)
+    $obj = (Get-CimInstance Win32_Service -Filter "Name='$TaskName'").StartName
+    if ($obj -notmatch [regex]::Escape($SvcUser)) { throw "service logon is '$obj', expected $UserAccount" }
+    OK "Windows Service '$TaskName' installed and running (logon: $obj) - visible in services.msc"
   } catch {
     $pwPlain = $null
     throw "Windows Service install failed: $_  (logs: $Root\$TaskName.out.log and .err.log)"
