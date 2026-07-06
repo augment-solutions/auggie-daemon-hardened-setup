@@ -65,18 +65,9 @@ $nodeMajor = [int](node -e "console.log(process.versions.node.split('.')[0])")
 if ($nodeMajor -lt 20) { throw "Node $nodeMajor too old; Node 22+ required." }
 elseif ($nodeMajor -lt 22) { WRN "Node $nodeMajor; Node 22+ recommended." } else { OK "Node $nodeMajor" }
 
-if (-not (Get-Command auggie -ErrorAction SilentlyContinue)) {
-  Info "Installing @augmentcode/auggie globally"
-  npm install -g @augmentcode/auggie --loglevel=error
-}
-$AuggieCmd = (Get-Command auggie.cmd -ErrorAction SilentlyContinue).Source
-if (-not $AuggieCmd) { $AuggieCmd = (Get-Command auggie).Source }
-$ver = (& auggie --version 2>$null | Select-Object -First 1)
-if ($ver -match "(\d+)\.(\d+)") {
-  $vMaj = [int]$Matches[1]; $vMin = [int]$Matches[2]
-  if (($vMaj -eq 0) -and ($vMin -lt 28)) { throw "auggie $ver has a daemon startup bug on Windows. Upgrade: npm install -g @augmentcode/auggie@latest" }
-}
-OK "auggie $ver at $AuggieCmd"
+# auggie is installed later, into C:\augment\npm, so the service account can read it.
+# A per-user npm install under the admin's profile is UNREACHABLE by svc-augment
+# (our own ACL boundary blocks it) and the task exits with code 1.
 
 # ---------- inputs ----------
 if (-not $PoolId) { $PoolId = Read-Host "Daemon pool ID (Cosmos > Environments > your Daemon Pool)" }
@@ -93,9 +84,18 @@ if ($SessionJson) {
   if (-not (Test-Path $SessionJson)) { throw "File not found: $SessionJson" }
   Copy-Item $SessionJson $tmpCred -Force
 } else {
-  $secure = Read-Host "Paste the session JSON on one line (input hidden)" -AsSecureString
-  $plain  = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
-  Set-Content -Path $tmpCred -Value $plain -NoNewline; $plain = $null
+  Write-Host "Paste the session JSON now (multi-line OK; input hidden). It ends automatically at the closing brace."
+  $buf = ""; $depth = 0; $started = $false
+  do {
+    $secure = Read-Host -AsSecureString
+    $line = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    $buf += $line + "`n"
+    foreach ($ch in $line.ToCharArray()) {
+      if ($ch -eq '{') { $depth++; $started = $true }
+      elseif ($ch -eq '}') { $depth-- }
+    }
+  } while (-not $started -or $depth -gt 0)
+  Set-Content -Path $tmpCred -Value $buf -NoNewline; $buf = $null
 }
 
 Info "Validating credential format"
@@ -150,6 +150,20 @@ New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
 icacls $Root /inheritance:r | Out-Null
 icacls $Root /grant "${SvcUser}:(OI)(CI)M" "Administrators:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
 
+# ---------- auggie: installed INSIDE C:\augment so svc-augment can execute it ----------
+Info "Installing @augmentcode/auggie into $Root\npm (readable by the service account)"
+$NpmPrefix = Join-Path $Root "npm"
+New-Item -ItemType Directory -Force -Path $NpmPrefix | Out-Null
+npm install -g --prefix $NpmPrefix @augmentcode/auggie --loglevel=error
+$AuggieCmd = Join-Path $NpmPrefix "auggie.cmd"
+if (-not (Test-Path $AuggieCmd)) { throw "auggie install failed: $AuggieCmd not found" }
+$ver = (& $AuggieCmd --version 2>$null | Select-Object -First 1)
+if ($ver -match "(\d+)\.(\d+)") {
+  $vMaj = [int]$Matches[1]; $vMin = [int]$Matches[2]
+  if (($vMaj -eq 0) -and ($vMin -lt 28)) { throw "auggie $ver has a daemon startup bug on Windows. Upgrade required." }
+}
+OK "auggie $ver at $AuggieCmd"
+
 # repo (clone/copy as admin; the ACL above already grants the service account)
 $AddWsDirs = @()
 function Materialize-Ws([string]$src) {
@@ -197,7 +211,9 @@ $argsLine = "daemon --pool-id $PoolId --augment-session-json `"$CredPath`" --wor
 foreach ($w in $AddWsDirs) { $argsLine += " --add-workspace `"$w`"" }
 if ($MaxAgents -gt 0) { $argsLine += " --max-agents $MaxAgents" }
 $argsLine += " --allow-indexing --name $DaemonName"
-$action  = New-ScheduledTaskAction -Execute $AuggieCmd -Argument $argsLine -WorkingDirectory $RepoDir
+# Wrap in cmd /c so stdout/stderr land in the log (Task Scheduler captures nothing by itself)
+$cmdArg = '/c ""' + $AuggieCmd + '" ' + $argsLine + ' >> "' + $LogOut + '" 2>&1"'
+$action  = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument $cmdArg -WorkingDirectory $RepoDir
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 3650)
