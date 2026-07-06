@@ -93,6 +93,36 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 - **Run-from-anywhere fix (v1.2):** commands executed as the service account now `cd` into its own home first. Previously, running the installer from inside a `chmod 700` home directory made npm crash as the service user (`EACCES uv_cwd`), because child processes inherited an unreadable working directory.
 
+## Version history
+
+All findings below came from real installs on macOS (validated end to end against a live Cosmos pool), and every fix applies to the corresponding scripts.
+
+**v2.0 - Onboarding overhaul** (all scripts)
+- Max agents: press Enter to keep the daemon's own default (100 slots); enter a number to cap it. The flag is omitted entirely when left at default.
+- Workspaces now accept a git URL (cloned), an existing local path (copied into the service account's workspace and chowned; non-git dirs get `git init` so worktrees work), or blank for a sandbox.
+- Multi-workspace support: add any number of workspaces; extras become `--add-workspace` flags in the service definition.
+- macOS: 2s settle + one retry on `launchctl bootstrap` to avoid "Bootstrap failed: 5: Input/output error" when replacing a running daemon.
+
+**v1.5 - Pool ID normalization** (all scripts)
+- Cosmos pool IDs carry a `pool-` prefix; the Cosmos UI and URLs can show the bare UUID. Bare 36-char UUIDs are now auto-prefixed with a warning. Without this, the daemon loops on "unknown daemon pool" while appearing superficially connected.
+
+**v1.4 - Honest registration detection** (macOS, Linux)
+- "WebSocket connected" is only the transport handshake and is no longer treated as success. The script now requires a real pool-registration log line, fails fast with plain-English diagnoses on the two known rejections ("unknown daemon pool" = wrong ID or tenant mismatch; "not the daemon pool connector" = connector misconfigured), and detects connect/close reject loops.
+
+**v1.3 - Network check correctness** (macOS, Linux, Windows)
+- macOS `lsof` ORs selection filters by default; without `-a` the listener check swept in every TCP listener on the machine (AirPlay 5000/7000, Spotify, etc.) plus all daemon file descriptors. Fixed with `-a` to AND the filters.
+- All platforms: only NON-loopback listeners fail the check; 127.0.0.1/::1 listeners are reported as informational. (In practice the daemon opens no listening ports at all - it is purely outbound.)
+- Outer script now moves into the service account's home before spawning service-user shells, silencing `shell-init: getcwd` warnings.
+
+**v1.2 - Run-from-anywhere fix** (macOS, Linux)
+- Commands executed as the service account now `cd` into its own home first. Previously, running the installer from inside a `chmod 700` home directory crashed npm as the service user (`EACCES uv_cwd`) because child processes inherited an unreadable working directory.
+
+**v1.1 - macOS group boundary fix** (macOS; loopback groundwork all platforms)
+- The service account gets its own dedicated primary group and is removed from `staff`. All macOS home directories are group `staff` by default, so a `staff`-member service account could list any home directory set to 750. The validator now recommends `chmod 700` on any home directory it can still read and explicitly fails if the account is in `staff`.
+
+**v1.0 - Initial release**
+- Locked-down service account per OS, Auggie CLI installed under the account's own npm prefix, Service Account credential validation (`accessToken` + `tenantURL` + `scopes` array - the CLI silently rejects sessions missing the scopes array), always-on service wrappers (LaunchDaemon / hardened systemd / Scheduled Task), and the automated boundary validation suite.
+
 ## Uninstall
 
 ```bash
