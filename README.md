@@ -93,17 +93,42 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 - **Run-from-anywhere fix (v1.2):** commands executed as the service account now `cd` into its own home first. Previously, running the installer from inside a `chmod 700` home directory made npm crash as the service user (`EACCES uv_cwd`), because child processes inherited an unreadable working directory.
 
-## Validated environments
+## Validated environments and support status
 
-Every script was executed end to end against a live Cosmos daemon pool (Augment `e2` tenant), with all three OSes registering daemons to the same pool (horizontal slot pooling confirmed). Boundary validations were run against real user data on each host.
+Every configuration below was executed end to end against a **live Cosmos daemon pool** (Augment `e2` tenant). At one point all three OSes had daemons registered to the same pool simultaneously, confirming horizontal slot pooling. Boundary validations ran against real user data on each host, and the negative tests (permission denials, identity rejection) were verified, not assumed.
 
-| OS | Environment | Runtime | Result |
-|---|---|---|---|
-| macOS 26.5.1 (25F80) | MacBook Pro, Apple Silicon (physical hardware, multi-user machine) | Node 23, auggie 0.32.0 | Full suite passing: hidden service account with dedicated group, home-dir denial verified at 700, zero listening ports, LaunchDaemon persistence, live pool registration |
-| Ubuntu 26.04 LTS (aarch64) | Multipass VM on Apple Silicon (2 vCPU / 6 GB), systemd | Node 22, auggie 0.32.0 | Full suite passing including `ProtectHome`/`ProtectSystem=strict` hardening, mount-namespace `/home` invisibility, decoy-user boundary test, systemd persistence |
-| Windows Server 2022 | GCP `e2-standard-2` (us-east1), fresh image | Node 22.14, auggie 0.32.0 | Scheduled Task path passing: non-admin local account, non-inherited ACLs, credential lockdown, task running as `svc-augment`. Windows Service (WinSW) mode added in v2.3.1 and not yet field-run |
+### Field-validated (ran here, passing)
 
-Not yet field-tested: WSL2 + the Linux script (the officially supported Windows path - expected to behave identically to the Ubuntu run), macOS Intel, and non-Ubuntu distros. The scripts use only portable mechanisms (useradd/systemd, sysadminctl/launchd, net user/schtasks), but dry-run on your target before production use.
+| OS / build | Environment | Persistence mechanism | Runtime | Validation result |
+|---|---|---|---|---|
+| macOS 26.5.1 (25F80) | MacBook Pro, Apple Silicon - physical multi-user machine | LaunchDaemon (`launchctl`) | Node 23, auggie 0.32.0 | Full suite passing: hidden non-admin account with dedicated primary group (not `staff`), other homes denied at `chmod 700`, zero listening ports, credential 0600, boot persistence, live pool registration |
+| Ubuntu 26.04 LTS (aarch64, kernel 7.0) | Multipass VM on Apple Silicon, 2 vCPU / 6 GB, systemd | systemd unit, `HARDENING=strict` | Node 22, auggie 0.32.0 | Full suite passing: `ProtectHome` + `ProtectSystem=strict` enforced, `/home` invisible inside the service mount namespace (verified via `nsenter`), decoy-user boundary test, boot persistence |
+| Windows Server 2022 | GCP `e2-standard-2` (us-east1), fresh image | **Scheduled Task** mode | Node 22.14, auggie 0.32.0 | Passing: non-admin local account with batch-logon right, non-inherited ACLs on `C:\augment`, other profiles denied by NTFS, task running as `svc-augment`, no listening ports |
+| Windows Server 2022 | same VM | **Windows Service** mode (WinSW v2.12.0) | Node 22.14, auggie 0.32.0 | Passing 12/0: service visible in services.msc, logon verified as `svc-augment` via StartName read-back, password never written to disk, SCM supervision, no listening ports |
+
+### Expected to work (same mechanisms, not run here)
+
+- **WSL2 + the Linux script** - WSL is Augment's *officially supported* Windows platform for the Auggie CLI, and WSL2 runs systemd, so the Ubuntu-validated path applies unchanged. Enable systemd in `/etc/wsl.conf` first.
+- **Other systemd distros** (Debian, RHEL/Rocky, Amazon Linux 2023) - the script uses only `useradd`, `npm`, `git`, and standard systemd directives. RHEL-family note: shell path is `/usr/sbin/nologin` (already what the script uses).
+- **macOS on Intel** - no Apple Silicon-specific code; Homebrew paths for both architectures are on the daemon's PATH.
+- **Windows 10/11 desktop** - same account/ACL/task mechanisms as Server 2022; the deny-interactive-logon step matters more on a shared desktop.
+
+### Known constraints (upstream, not this repo)
+
+- Augment platform requirements: Enterprise plan for Service Accounts; auggie **>= 0.28.0 on Windows** (earlier versions have a daemon startup bug); Node 22 recommended (20 minimum per docs).
+- Officially supported CLI platforms per Augment docs: **macOS, Linux, Windows via WSL**. Native Windows (both modes in this repo) is a field-proven pattern, not the documented platform.
+- Laptops sleep: a closed MacBook lid drops the daemon until wake. Production deployments belong on always-on hosts.
+- The pool ID must include its `pool-` prefix (the installer auto-corrects bare UUIDs).
+- A first-party service installer (`auggie daemon install`) is on Augment's roadmap and will eventually supersede the wrappers here.
+
+### What the validation suite proved on each host (the claims a security reviewer can check)
+
+1. The service account is non-admin, hidden/non-interactive, and on macOS holds its own primary group.
+2. It cannot read any other user's home directory or profile, and cannot write outside its own tree - verified by attempting it, not by inspecting config.
+3. The daemon process is owned by the service account (the suite caught and blocked a silent SYSTEM escalation during development - see v2.3.2).
+4. The daemon opens **no listening ports**; connectivity is outbound-only WSS to Augment.
+5. The credential file is owner-only (0600 / restricted ACL), and in Windows service mode the password never exists on disk.
+6. A daemon presenting any identity other than the pool's connector service account is rejected by Cosmos at connect.
 
 ## Version history
 
