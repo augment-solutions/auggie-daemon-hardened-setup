@@ -101,7 +101,7 @@ Every script was executed end to end against a live Cosmos daemon pool (Augment 
 |---|---|---|---|
 | macOS 26.5.1 (25F80) | MacBook Pro, Apple Silicon (physical hardware, multi-user machine) | Node 23, auggie 0.32.0 | Full suite passing: hidden service account with dedicated group, home-dir denial verified at 700, zero listening ports, LaunchDaemon persistence, live pool registration |
 | Ubuntu 26.04 LTS (aarch64) | Multipass VM on Apple Silicon (2 vCPU / 6 GB), systemd | Node 22, auggie 0.32.0 | Full suite passing including `ProtectHome`/`ProtectSystem=strict` hardening, mount-namespace `/home` invisibility, decoy-user boundary test, systemd persistence |
-| Windows Server 2022 | GCP `e2-standard-2` (us-east1), fresh image | Node 22.14, auggie 0.32.0 | Scheduled Task path passing: non-admin local account, non-inherited ACLs, credential lockdown, task running as `svc-augment`. Windows Service (NSSM) mode added in v2.3 and not yet field-run |
+| Windows Server 2022 | GCP `e2-standard-2` (us-east1), fresh image | Node 22.14, auggie 0.32.0 | Scheduled Task path passing: non-admin local account, non-inherited ACLs, credential lockdown, task running as `svc-augment`. Windows Service (WinSW) mode added in v2.3.1 and not yet field-run |
 
 Not yet field-tested: WSL2 + the Linux script (the officially supported Windows path - expected to behave identically to the Ubuntu run), macOS Intel, and non-Ubuntu distros. The scripts use only portable mechanisms (useradd/systemd, sysadminctl/launchd, net user/schtasks), but dry-run on your target before production use.
 
@@ -109,8 +109,11 @@ Not yet field-tested: WSL2 + the Linux script (the officially supported Windows 
 
 All findings below came from real installs on macOS (validated end to end against a live Cosmos pool), and every fix applies to the corresponding scripts.
 
+**v2.3.1 - Service wrapper switched to WinSW** (Windows)
+- nssm.cc (a single-maintainer host) returned 503 during field testing; the service mode now uses WinSW v2.12.0 from official GitHub releases instead (github.com/winsw/winsw, MIT, actively maintained). The account password is required only at install time and is scrubbed from the on-disk config immediately after the SCM stores the credential.
+
 **v2.3 - Windows run-mode choice** (Windows)
-- Onboarding now asks: Scheduled Task (default - boot start, no login, auto-restart, no third-party software; lives in taskschd.msc, not services.msc) or Windows Service via NSSM (visible in services.msc, SCM-supervised, works with SCOM/Datadog service monitoring; downloads nssm 2.24 into C:\augment\nssm). Strictly one mechanism - the installer removes the other if present, and uninstall cleans up both.
+- Onboarding now asks: Scheduled Task (default - boot start, no login, auto-restart, no third-party software; lives in taskschd.msc, not services.msc) or Windows Service (visible in services.msc, SCM-supervised, works with SCOM/Datadog service monitoring). Strictly one mechanism - the installer removes the other if present, and uninstall cleans up both.
 
 **v2.2 - Windows: daemon blocked by its own boundary** (Windows)
 - auggie now installs into `C:\augment\npm` instead of the admin's per-user npm path. The service account cannot read `C:\Users\<admin>\AppData\...` (by design), so the task exited with code 1 instantly. The fix keeps the binary inside the ACL'd tree the service account owns.

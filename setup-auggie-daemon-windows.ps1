@@ -50,8 +50,8 @@ if ($Uninstall) {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   if (Get-Service -Name $TaskName -ErrorAction SilentlyContinue) {
     Stop-Service $TaskName -Force -ErrorAction SilentlyContinue
-    $nssmExe = Join-Path $Root "nssm\nssm.exe"
-    if (Test-Path $nssmExe) { & $nssmExe remove $TaskName confirm | Out-Null } else { sc.exe delete $TaskName | Out-Null }
+    $winswExe = Join-Path $Root "service\$TaskName.exe"
+    if (Test-Path $winswExe) { & $winswExe uninstall | Out-Null } else { sc.exe delete $TaskName | Out-Null }
   }
   Get-Process -Name node -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "auggie" } |
@@ -127,9 +127,10 @@ if (-not $RunMode) {
   Write-Host "  [1] Scheduled Task (default) - starts at boot with no login, runs as the"
   Write-Host "      service account, auto-restarts on failure. No third-party software."
   Write-Host "      Managed in Task Scheduler (taskschd.msc), NOT in services.msc."
-  Write-Host "  [2] Windows Service (via NSSM) - appears in services.msc, supervised by the"
+  Write-Host "  [2] Windows Service (via WinSW) - appears in services.msc, supervised by the"
   Write-Host "      Service Control Manager, works with SCOM/Datadog service monitoring."
-  Write-Host "      Downloads the open-source NSSM wrapper (nssm.cc) into C:\augment\nssm."
+  Write-Host "      Downloads the open-source WinSW wrapper (github.com/winsw/winsw, official"
+  Write-Host "      release) into C:\augment\service."
   $rm = Read-Host "Choose [1/2, Enter = 1]"
   if ($rm -eq "2") { $RunMode = "service" } else { $RunMode = "task" }
 }
@@ -258,37 +259,58 @@ if ($RunMode -eq "task") {
     throw "Scheduled task registration failed: $_  (verify svc-augment exists and has 'Log on as a batch job')"
   }
 } else {
-  Info "Installing Windows Service '$TaskName' via NSSM (runs as $SvcUser, auto-start)"
-  $NssmDir = Join-Path $Root "nssm"
-  $NssmExe = Join-Path $NssmDir "nssm.exe"
-  if (-not (Test-Path $NssmExe)) {
+  Info "Installing Windows Service '$TaskName' via WinSW (runs as $SvcUser, auto-start)"
+  # WinSW ships from official GitHub releases (nssm.cc is a single-maintainer host
+  # that intermittently 503s). WinSW requires the exe and xml to share a basename.
+  $SvcDir  = Join-Path $Root "service"
+  $WinswExe = Join-Path $SvcDir "$TaskName.exe"
+  $WinswXml = Join-Path $SvcDir "$TaskName.xml"
+  New-Item -ItemType Directory -Force -Path $SvcDir | Out-Null
+  if (-not (Test-Path $WinswExe)) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $zip = Join-Path $env:TEMP "nssm.zip"
-    Invoke-WebRequest "https://nssm.cc/release/nssm-2.24.zip" -OutFile $zip
-    Expand-Archive $zip -DestinationPath $env:TEMP\nssm-x -Force
-    New-Item -ItemType Directory -Force -Path $NssmDir | Out-Null
-    Copy-Item "$env:TEMP\nssm-x\nssm-2.24\win64\nssm.exe" $NssmExe -Force
-    Remove-Item $zip -Force; Remove-Item "$env:TEMP\nssm-x" -Recurse -Force
+    Invoke-WebRequest "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe" -OutFile $WinswExe
   }
+  # svc-augment needs read+execute on the wrapper; nobody else beyond admins
+  icacls $SvcDir /inheritance:r | Out-Null
+  icacls $SvcDir /grant "${SvcUser}:(OI)(CI)RX" "Administrators:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
+
+  # Config WITH password (needed only at install; scrubbed immediately after)
+  $xmlEsc = { param($t) $t -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;' }
+  $svcXml = @"
+<service>
+  <id>$TaskName</id>
+  <name>$TaskName</name>
+  <description>Augment Auggie daemon (hardened service account: $SvcUser)</description>
+  <executable>%SystemRoot%\System32\cmd.exe</executable>
+  <arguments>/c ""$AuggieCmd" $(& $xmlEsc $argsLine)"</arguments>
+  <workingdirectory>$RepoDir</workingdirectory>
+  <serviceaccount>
+    <username>$UserAccount</username>
+    <password>$(& $xmlEsc $pwPlain)</password>
+    <allowservicelogon>true</allowservicelogon>
+  </serviceaccount>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="5 sec"/>
+  <logpath>$Root</logpath>
+  <log mode="append"/>
+</service>
+"@
   try {
-    & $NssmExe install $TaskName "$env:SystemRoot\System32\cmd.exe" | Out-Null
-    & $NssmExe set $TaskName AppParameters ('/c ""' + $AuggieCmd + '" ' + $argsLine + '"') | Out-Null
-    & $NssmExe set $TaskName AppDirectory $RepoDir | Out-Null
-    & $NssmExe set $TaskName AppStdout $LogOut | Out-Null
-    & $NssmExe set $TaskName AppStderr $LogOut | Out-Null
-    & $NssmExe set $TaskName AppExit Default Restart | Out-Null
-    & $NssmExe set $TaskName AppRestartDelay 5000 | Out-Null
-    & $NssmExe set $TaskName Start SERVICE_AUTO_START | Out-Null
-    & $NssmExe set $TaskName ObjectName $UserAccount $pwPlain | Out-Null   # NSSM grants 'Log on as a service'
+    Set-Content -Path $WinswXml -Value $svcXml -Encoding UTF8
+    & $WinswExe install | Out-Null
+    # Scrub the password from disk: the SCM has stored the credential; WinSW only
+    # reads serviceaccount at install time.
+    $svcXml = $svcXml -replace "(?s)<password>.*?</password>\s*", ""
+    Set-Content -Path $WinswXml -Value $svcXml -Encoding UTF8
     $pwPlain = $null
-    & $NssmExe start $TaskName | Out-Null
+    & $WinswExe start | Out-Null
     Start-Sleep 3
     $svc = Get-Service $TaskName -ErrorAction Stop
     if ($svc.Status -ne "Running") { throw "service state: $($svc.Status)" }
     OK "Windows Service '$TaskName' installed and running (as $UserAccount) - visible in services.msc"
   } catch {
     $pwPlain = $null
-    throw "Windows Service install failed: $_  (check $LogOut and: nssm.exe status $TaskName)"
+    throw "Windows Service install failed: $_  (logs: $Root\$TaskName.out.log and .err.log)"
   }
 }
 
