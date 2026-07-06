@@ -85,6 +85,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 - **macOS group fix:** the service account gets its own dedicated primary group and is removed from `staff`. macOS home directories are group `staff` by default, so a `staff`-member service account could list any home directory set to 750. With the dedicated group, only `chmod 700`-level privacy is assumed of no one; the validator now recommends `chmod 700` on any home directory it can still read.
 - **Loopback listeners are normal:** the daemon (Node) may open local `127.0.0.1` ports for internal IPC. These are not reachable from the network. All three validators now fail only on non-loopback (`0.0.0.0` / LAN-bound) listeners and report loopback listeners as informational.
 
+- **Run-from-anywhere fix (v1.2):** commands executed as the service account now `cd` into its own home first. Previously, running the installer from inside a `chmod 700` home directory made npm crash as the service user (`EACCES uv_cwd`), because child processes inherited an unreadable working directory.
+
 ## Uninstall
 
 ```bash

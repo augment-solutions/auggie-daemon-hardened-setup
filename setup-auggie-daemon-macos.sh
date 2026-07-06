@@ -140,15 +140,19 @@ chown -R "${SVC_USER}:${SVC_USER}" "${SVC_HOME}"
 chmod 750 "${SVC_HOME}"
 
 # ---------- install auggie under the service account ----------
+# NOTE: every command run as ${SVC_USER} must cd into its own home first.
+# The invoking admin's cwd may be inside a 700 home dir the service account
+# cannot read, and npm/node hard-fail on an unreadable cwd (EACCES uv_cwd).
 info "Installing @augmentcode/auggie under ${SVC_USER}'s npm prefix (may take a minute)"
 sudo -u "${SVC_USER}" -H bash -c "
+  cd '${SVC_HOME}'
   export HOME='${SVC_HOME}'
   npm config set prefix '${SVC_HOME}/.npm-global' --location=user
   npm install -g @augmentcode/auggie --loglevel=error
 " || die "auggie install failed."
 AUGGIE_BIN="${SVC_HOME}/.npm-global/bin/auggie"
 [[ -x "${AUGGIE_BIN}" ]] || die "auggie binary not found at ${AUGGIE_BIN}"
-AUGGIE_VER=$(sudo -u "${SVC_USER}" HOME="${SVC_HOME}" "${AUGGIE_BIN}" --version 2>/dev/null | head -1 || true)
+AUGGIE_VER=$(sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && HOME='${SVC_HOME}' '${AUGGIE_BIN}' --version" 2>/dev/null | head -1 || true)
 ok "auggie ${AUGGIE_VER:-installed} at ${AUGGIE_BIN}"
 
 # ---------- workspace repo ----------
@@ -156,9 +160,10 @@ info "Preparing workspace repo"
 REPO_DIR="${WORKSPACE}/repo-a"
 if [[ ! -d "${REPO_DIR}/.git" ]]; then
   if [[ -n "${REPO_URL}" ]]; then
-    sudo -u "${SVC_USER}" -H git clone "${REPO_URL}" "${REPO_DIR}" || die "git clone failed."
+    sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && git clone '${REPO_URL}' '${REPO_DIR}'" || die "git clone failed."
   else
     sudo -u "${SVC_USER}" -H bash -c "
+      cd '${SVC_HOME}' &&
       git init -q '${REPO_DIR}' && cd '${REPO_DIR}' &&
       git config user.email 'svc@localhost' && git config user.name 'svc-augment' &&
       echo '# sandbox' > README.md && git add . && git commit -qm init"
@@ -235,10 +240,10 @@ for h in /Users/*; do
 done
 [[ ${HOMES_BLOCKED} -eq 1 ]] && ok "cannot read any other user's home directory"
 
-sudo -u "${SVC_USER}" touch /usr/local/.boundary-test 2>/dev/null \
+sudo -u "${SVC_USER}" -H bash -c "cd / && touch /usr/local/.boundary-test" 2>/dev/null \
   && { bad "can write to /usr/local"; rm -f /usr/local/.boundary-test; } \
   || ok "cannot write outside its tree (/usr/local denied)"
-sudo -u "${SVC_USER}" -H touch "${WORKSPACE}/.boundary-ok" 2>/dev/null \
+sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && touch '${WORKSPACE}/.boundary-ok'" 2>/dev/null \
   && { ok "can write inside workspace"; rm -f "${WORKSPACE}/.boundary-ok"; } \
   || bad "cannot write inside workspace"
 

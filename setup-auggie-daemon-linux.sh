@@ -108,8 +108,11 @@ chown -R "${SVC_USER}:${SVC_USER}" "${SVC_HOME}"
 chmod 750 "${SVC_HOME}"
 
 # ---------- auggie ----------
+# NOTE: commands run as ${SVC_USER} must cd into its own home first; the
+# admin's cwd may be inside a 700 home dir, and npm fails on unreadable cwd.
 info "Installing @augmentcode/auggie under ${SVC_USER}'s npm prefix"
 sudo -u "${SVC_USER}" -H bash -c "
+  cd '${SVC_HOME}'
   export HOME='${SVC_HOME}'
   npm config set prefix '${SVC_HOME}/.npm-global' --location=user
   npm install -g @augmentcode/auggie --loglevel=error
@@ -122,9 +125,10 @@ ok "auggie installed"
 REPO_DIR="${WORKSPACE}/repo-a"
 if [[ ! -d "${REPO_DIR}/.git" ]]; then
   if [[ -n "${REPO_URL}" ]]; then
-    sudo -u "${SVC_USER}" -H git clone "${REPO_URL}" "${REPO_DIR}" || die "git clone failed."
+    sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && git clone '${REPO_URL}' '${REPO_DIR}'" || die "git clone failed."
   else
     sudo -u "${SVC_USER}" -H bash -c "
+      cd '${SVC_HOME}' &&
       git init -q '${REPO_DIR}' && cd '${REPO_DIR}' &&
       git config user.email 'svc@localhost' && git config user.name 'svc-augment' &&
       echo '# sandbox' > README.md && git add . && git commit -qm init"
@@ -196,10 +200,10 @@ for h in /home/* /root; do
 done
 [[ ${HOMES_BLOCKED} -eq 1 ]] && ok "cannot read /root or any /home/* directory"
 
-sudo -u "${SVC_USER}" touch /usr/local/.boundary-test 2>/dev/null \
+sudo -u "${SVC_USER}" -H bash -c "cd / && touch /usr/local/.boundary-test" 2>/dev/null \
   && { bad "can write to /usr/local"; rm -f /usr/local/.boundary-test; } \
   || ok "cannot write outside its tree"
-sudo -u "${SVC_USER}" -H touch "${WORKSPACE}/.boundary-ok" 2>/dev/null \
+sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && touch '${WORKSPACE}/.boundary-ok'" 2>/dev/null \
   && { ok "can write inside workspace"; rm -f "${WORKSPACE}/.boundary-ok"; } \
   || bad "cannot write inside workspace"
 
