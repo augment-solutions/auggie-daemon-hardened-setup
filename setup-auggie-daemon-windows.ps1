@@ -201,11 +201,17 @@ $action  = New-ScheduledTaskAction -Execute $AuggieCmd -Argument $argsLine -Work
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 3650)
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-  -User ".\$SvcUser" -Password $pwPlain -RunLevel Limited | Out-Null
-$pwPlain = $null
-Start-ScheduledTask -TaskName $TaskName
-OK "task registered and started"
+$UserAccount = "$env:COMPUTERNAME\$SvcUser"   # Register-ScheduledTask cannot resolve the '.\user' shorthand
+try {
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
+    -User $UserAccount -Password $pwPlain -RunLevel Limited -ErrorAction Stop | Out-Null
+  $pwPlain = $null
+  Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+  OK "task registered and started (as $UserAccount)"
+} catch {
+  $pwPlain = $null
+  throw "Scheduled task registration failed: $_  (verify svc-augment exists and has 'Log on as a batch job')"
+}
 
 Info "Waiting up to 90s for the daemon process"
 $deadline = (Get-Date).AddSeconds(90); $proc = $null
