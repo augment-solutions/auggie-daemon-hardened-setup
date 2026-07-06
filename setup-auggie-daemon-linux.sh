@@ -221,8 +221,17 @@ MAINPID=$(systemctl show -p MainPID --value "${SVCNAME}")
 if [[ -n "${MAINPID}" && "${MAINPID}" != "0" ]]; then
   PUSER=$(ps -o user= -p "${MAINPID}" | tr -d ' ')
   [[ "${PUSER}" == "${SVC_USER}" ]] && ok "daemon runs as ${SVC_USER}" || bad "daemon runs as ${PUSER}"
-  ss -ltnp 2>/dev/null | grep -q "pid=${MAINPID}" \
-    && bad "daemon has a LISTENING port" || ok "no inbound listening ports"
+  # Only NON-loopback listeners are a network exposure; local 127.0.0.1/::1
+  # listeners (Node IPC etc.) are unreachable from the network.
+  ALL_LISTEN=$(ss -ltnp 2>/dev/null | grep "pid=${MAINPID}" | awk '{print $4}' || true)
+  EXT_LISTEN=$(printf '%s\n' "${ALL_LISTEN}" | grep -vE '^(127\.0\.0\.1|\[::1\]):' | grep -v '^$' || true)
+  if [[ -n "${EXT_LISTEN}" ]]; then
+    bad "daemon listening on a NON-loopback address: $(echo "${EXT_LISTEN}" | tr '\n' ' ')"
+  elif [[ -n "${ALL_LISTEN}" ]]; then
+    ok "listeners are loopback-only ($(echo "${ALL_LISTEN}" | head -3 | tr '\n' ' ')) - not network-reachable"
+  else
+    ok "no listening ports at all (outbound-only)"
+  fi
 fi
 PERMS=$(stat -c "%a" "${SVC_HOME}/.augment/session.json")
 [[ "${PERMS}" == "600" ]] && ok "credential is 0600" || bad "credential perms ${PERMS}, expected 600"

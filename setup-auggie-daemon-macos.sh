@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 #
-# setup-auggie-daemon-macos.sh
+# setup-auggie-daemon-macos.sh  (v1.1)
 # Creates a locked-down macOS service account, installs the Auggie CLI under it,
 # links an Augment (Cosmos) Service Account credential, installs a LaunchDaemon,
 # and validates the OS-level security boundary end to end.
+#
+# v1.1 field-test fixes:
+#   - Service account now gets its OWN primary group instead of macOS default
+#     'staff'. (All macOS home dirs are group 'staff'; a staff-member service
+#     account could read any home dir set to 750. Dedicated group closes this.)
+#   - Home-dir finding now recommends chmod 700 (owner-only), not 750.
+#   - Network check only fails on NON-LOOPBACK listeners; local 127.0.0.1
+#     listeners (Node IPC) are reported but not a network exposure.
 #
 # Usage:   sudo ./setup-auggie-daemon-macos.sh
 #          sudo ./setup-auggie-daemon-macos.sh --uninstall
@@ -41,6 +49,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   if id "${SVC_USER}" &>/dev/null; then
     sysadminctl -deleteUser "${SVC_USER}" 2>/dev/null || dscl . -delete "/Users/${SVC_USER}"
   fi
+  dseditgroup -o delete -q "${SVC_USER}" 2>/dev/null || true
   read -r -p "Delete ${SVC_HOME} (workspace + credential)? [y/N] " yn
   [[ "${yn}" == "y" ]] && rm -rf "${SVC_HOME}"
   echo "Uninstalled."
@@ -112,9 +121,22 @@ else
   ok "created (hidden, non-admin, no login shell)"
 fi
 
+# Dedicated primary group: NOT 'staff'. Every macOS home dir is group 'staff',
+# so a staff-member service account can read any home dir with 750 perms.
+info "Assigning dedicated primary group '${SVC_USER}' (removing from 'staff')"
+dseditgroup -o create -q "${SVC_USER}" 2>/dev/null || true
+SVC_GID=$(dscl . -read "/Groups/${SVC_USER}" PrimaryGroupID | awk '{print $2}')
+dscl . -create "/Users/${SVC_USER}" PrimaryGroupID "${SVC_GID}"
+dseditgroup -o edit -d "${SVC_USER}" -t user staff 2>/dev/null || true
+if id -Gn "${SVC_USER}" | tr ' ' '\n' | grep -qx staff; then
+  warn "still shows membership in 'staff' - verify with: id ${SVC_USER}"
+else
+  ok "primary group ${SVC_USER} (gid ${SVC_GID}); not in 'staff'"
+fi
+
 info "Preparing directories"
 mkdir -p "${WORKSPACE}" "${SVC_HOME}/.augment" "${SVC_HOME}/.npm-global"
-chown -R "${SVC_USER}:staff" "${SVC_HOME}"
+chown -R "${SVC_USER}:${SVC_USER}" "${SVC_HOME}"
 chmod 750 "${SVC_HOME}"
 
 # ---------- install auggie under the service account ----------
@@ -146,7 +168,7 @@ fi
 
 # ---------- credential ----------
 info "Installing Service Account credential (owner-only 0600)"
-install -o "${SVC_USER}" -g staff -m 600 "${SESSION_TMP}" "${SVC_HOME}/.augment/session.json"
+install -o "${SVC_USER}" -g "${SVC_USER}" -m 600 "${SESSION_TMP}" "${SVC_HOME}/.augment/session.json"
 
 # ---------- LaunchDaemon ----------
 info "Writing LaunchDaemon ${PLIST}"
@@ -157,6 +179,7 @@ cat > "${PLIST}" <<PLISTEOF
 <plist version="1.0"><dict>
   <key>Label</key><string>${LABEL}</string>
   <key>UserName</key><string>${SVC_USER}</string>
+  <key>GroupName</key><string>${SVC_USER}</string>
   <key>WorkingDirectory</key><string>${REPO_DIR}</string>
   <key>EnvironmentVariables</key><dict>
     <key>HOME</key><string>${SVC_HOME}</string>
@@ -194,6 +217,8 @@ else warn "no CONNECTED line yet - check: tail -f ${LOG_OUT} ${LOG_ERR}"; fi
 echo; info "VALIDATION: OS boundary"
 dsmemberutil checkmembership -U "${SVC_USER}" -G admin 2>/dev/null | grep -q "is not a member" \
   && ok "not in admin group" || bad "IS in admin group"
+id -Gn "${SVC_USER}" | tr ' ' '\n' | grep -qx staff \
+  && bad "in 'staff' group (can read 750 home dirs)" || ok "not in 'staff' group"
 [[ "$(dscl . -read /Users/${SVC_USER} UserShell 2>/dev/null | awk '{print $2}')" == "/usr/bin/false" ]] \
   && ok "no interactive shell" || bad "has an interactive shell"
 dscl . -read "/Users/${SVC_USER}" IsHidden 2>/dev/null | grep -q 1 \
@@ -204,7 +229,8 @@ for h in /Users/*; do
   [[ "$h" == "/Users/Shared" || "$h" == "/Users/${SVC_USER}" ]] && continue
   [[ -d "$h" ]] || continue
   if sudo -u "${SVC_USER}" ls "$h" >/dev/null 2>&1; then
-    bad "can list $h  ->  run: chmod 750 $h"; HOMES_BLOCKED=0
+    bad "can list $h  ->  run: sudo chmod 700 $h   (750 is not enough if the dir's group is broad, e.g. 'staff')"
+    HOMES_BLOCKED=0
   fi
 done
 [[ ${HOMES_BLOCKED} -eq 1 ]] && ok "cannot read any other user's home directory"
@@ -221,8 +247,17 @@ DPID=$(pgrep -f "auggie.*daemon.*${POOL_ID}" | head -1 || true)
 if [[ -n "${DPID}" ]]; then
   PUSER=$(ps -o user= -p "${DPID}" | tr -d ' ')
   [[ "${PUSER}" == "${SVC_USER}" ]] && ok "daemon runs as ${SVC_USER} (pid ${DPID})" || bad "daemon runs as ${PUSER}"
-  lsof -p "${DPID}" -iTCP -sTCP:LISTEN 2>/dev/null | grep -q . \
-    && bad "daemon has a LISTENING port" || ok "no inbound listening ports (outbound-only)"
+  # Only NON-LOOPBACK listeners are a network exposure. Local 127.0.0.1/::1
+  # listeners (Node IPC etc.) are unreachable from the network.
+  ALL_LISTEN=$(lsof -p "${DPID}" -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' || true)
+  EXT_LISTEN=$(printf '%s\n' "${ALL_LISTEN}" | grep -vE '^(127\.0\.0\.1|\[::1\]|localhost):' | grep -v '^$' || true)
+  if [[ -n "${EXT_LISTEN}" ]]; then
+    bad "daemon listening on a NON-loopback address: $(echo "${EXT_LISTEN}" | tr '\n' ' ')"
+  elif [[ -n "${ALL_LISTEN}" ]]; then
+    ok "listeners are loopback-only ($(echo "${ALL_LISTEN}" | head -3 | tr '\n' ' ')) - not network-reachable"
+  else
+    ok "no listening ports at all (outbound-only)"
+  fi
 else
   warn "daemon process not found; skipping process/network checks"
 fi

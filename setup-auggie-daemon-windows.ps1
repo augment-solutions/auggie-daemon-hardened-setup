@@ -208,8 +208,17 @@ else { BAD "credential ACL looser than expected: run icacls $CredPath" }
 if ($proc) {
   $ownerInfo = Invoke-CimMethod -InputObject $proc -MethodName GetOwner
   if ($ownerInfo.User -eq $SvcUser) { OK "daemon runs as $SvcUser" } else { BAD "daemon runs as $($ownerInfo.User)" }
+  # Only NON-loopback listeners are a network exposure; 127.0.0.1/::1 listeners
+  # (Node IPC etc.) are unreachable from the network.
   $listen = Get-NetTCPConnection -State Listen -OwningProcess $proc.ProcessId -ErrorAction SilentlyContinue
-  if ($listen) { BAD "daemon has a LISTENING port" } else { OK "no inbound listening ports (outbound-only)" }
+  $external = $listen | Where-Object { $_.LocalAddress -notin @("127.0.0.1","::1") }
+  if ($external) {
+    BAD ("daemon listening on a NON-loopback address: " + (($external | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join " "))
+  } elseif ($listen) {
+    OK ("listeners are loopback-only (" + (($listen | Select-Object -First 3 | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join " ") + ") - not network-reachable")
+  } else {
+    OK "no listening ports at all (outbound-only)"
+  }
 }
 
 Write-Host ""

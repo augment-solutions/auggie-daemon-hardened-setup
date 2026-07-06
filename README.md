@@ -80,6 +80,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 - Never point `--workspace` at the account's home directory itself; indexing is blocked there and pool sessions will fail to start.
 - Keep the CLI updated on the host (`npm update -g @augmentcode/auggie`); long-running daemons don't auto-update.
 
+## Field-testing notes (v1.1)
+
+- **macOS group fix:** the service account gets its own dedicated primary group and is removed from `staff`. macOS home directories are group `staff` by default, so a `staff`-member service account could list any home directory set to 750. With the dedicated group, only `chmod 700`-level privacy is assumed of no one; the validator now recommends `chmod 700` on any home directory it can still read.
+- **Loopback listeners are normal:** the daemon (Node) may open local `127.0.0.1` ports for internal IPC. These are not reachable from the network. All three validators now fail only on non-loopback (`0.0.0.0` / LAN-bound) listeners and report loopback listeners as informational.
+
 ## Uninstall
 
 ```bash
