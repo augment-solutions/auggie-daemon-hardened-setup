@@ -70,6 +70,11 @@ if [[ -z "${POOL_ID:-}" ]]; then
   read -r -p "Daemon pool ID (from Cosmos > Environments > your Daemon Pool): " POOL_ID
 fi
 [[ -n "${POOL_ID}" ]] || die "Pool ID is required."
+# Normalize: Cosmos pool IDs carry a 'pool-' prefix; auto-add it for bare UUIDs.
+if [[ "${POOL_ID}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+  POOL_ID="pool-${POOL_ID}"
+  warn "pool ID had no 'pool-' prefix; using ${POOL_ID}"
+fi
 
 # Service Account credential: file path, or secure paste
 SESSION_TMP="$(mktemp)"

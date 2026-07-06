@@ -80,6 +80,8 @@ OK "auggie $ver at $AuggieCmd"
 # ---------- inputs ----------
 if (-not $PoolId) { $PoolId = Read-Host "Daemon pool ID (Cosmos > Environments > your Daemon Pool)" }
 if (-not $PoolId) { throw "Pool ID is required." }
+# Normalize: Cosmos pool IDs carry a 'pool-' prefix; auto-add it for bare UUIDs.
+if ($PoolId -match '^[0-9a-fA-F-]{36}$') { $PoolId = "pool-$PoolId"; WRN "pool ID had no 'pool-' prefix; using $PoolId" }
 
 if (-not $SessionJson) {
   Write-Host "Service Account credential (session.json from app.augmentcode.com/settings/service-accounts)."
