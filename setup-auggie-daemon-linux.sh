@@ -177,15 +177,34 @@ systemctl daemon-reload
 systemctl enable --now "${SVCNAME}"
 
 info "Waiting up to 90s for the daemon to register with Cosmos"
-CONNECTED=0
+CONNECTED=0; REJECTED=""
 for _ in $(seq 1 45); do
-  if journalctl -u "${SVCNAME}" --no-pager -n 200 2>/dev/null | grep -qiE "registered with poseidon|connected"; then
+  LOGS=$(journalctl -u "${SVCNAME}" --no-pager -n 200 2>/dev/null || true)
+  # 'WebSocket connected' is only the transport - do NOT treat it as success.
+  if grep -qiE "unknown daemon pool" <<< "${LOGS}"; then
+    REJECTED="pool not found: wrong pool ID, or the pool lives in a different tenant than the service account."
+    break
+  fi
+  if grep -qiE "not the daemon pool connector" <<< "${LOGS}"; then
+    REJECTED="identity rejected: the pool's connector is not this service account."
+    break
+  fi
+  if grep -qiE "registered with poseidon|daemon registered|registered daemon" <<< "${LOGS}"; then
     CONNECTED=1; break
   fi
   sleep 2
 done
-[[ ${CONNECTED} -eq 1 ]] && ok "daemon CONNECTED (pool ${POOL_ID})" \
-  || warn "no CONNECTED line yet - check: journalctl -u ${SVCNAME} -f"
+if   [[ -n "${REJECTED}" ]]; then bad "daemon REJECTED by Cosmos - ${REJECTED}"
+elif [[ ${CONNECTED} -eq 1 ]]; then ok "daemon REGISTERED with pool ${POOL_ID}"
+else
+  sleep 8
+  LAST=$(journalctl -u "${SVCNAME}" --no-pager -n 5 2>/dev/null | grep -cE "WebSocket closed|Reconnecting" || true)
+  if [[ "${LAST}" -gt 0 ]]; then
+    bad "daemon is in a connect/close loop - check: journalctl -u ${SVCNAME} -n 30"
+  else
+    warn "no explicit registration line found but connection appears stable - verify the pool shows 1 daemon online in Cosmos"
+  fi
+fi
 
 # ---------- validation ----------
 echo; info "VALIDATION: OS boundary"

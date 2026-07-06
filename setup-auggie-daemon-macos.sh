@@ -215,13 +215,36 @@ launchctl bootstrap system "${PLIST}"
 
 # ---------- wait for connection ----------
 info "Waiting up to 90s for the daemon to register with Cosmos"
-CONNECTED=0
+CONNECTED=0; REJECTED=""
 for _ in $(seq 1 45); do
-  if grep -qiE "registered with poseidon|connected" "${LOG_OUT}" "${LOG_ERR}" 2>/dev/null; then CONNECTED=1; break; fi
+  # 'WebSocket connected' is only the transport - do NOT treat it as success.
+  # Real success is pool registration; known rejections are surfaced as errors.
+  if grep -qiE "unknown daemon pool" "${LOG_OUT}" "${LOG_ERR}" 2>/dev/null; then
+    REJECTED="pool not found: the pool ID is wrong, or the pool lives in a different tenant than the service account. Check the pool detail page in Cosmos and that the SA is in the same org."
+    break
+  fi
+  if grep -qiE "not the daemon pool connector" "${LOG_OUT}" "${LOG_ERR}" 2>/dev/null; then
+    REJECTED="identity rejected: the pool's connector is not this service account. Set the pool connector to the SA in Cosmos."
+    break
+  fi
+  if grep -qiE "registered with poseidon|daemon registered|registered daemon" "${LOG_OUT}" "${LOG_ERR}" 2>/dev/null; then
+    CONNECTED=1; break
+  fi
   sleep 2
 done
-if [[ ${CONNECTED} -eq 1 ]]; then ok "daemon CONNECTED (pool ${POOL_ID})"
-else warn "no CONNECTED line yet - check: tail -f ${LOG_OUT} ${LOG_ERR}"; fi
+if   [[ -n "${REJECTED}" ]]; then bad "daemon REJECTED by Cosmos - ${REJECTED}"
+elif [[ ${CONNECTED} -eq 1 ]]; then ok "daemon REGISTERED with pool ${POOL_ID}"
+else
+  # No explicit registration line and no known error: verify liveness by
+  # checking the socket stays open (a reject loop closes it within ~1s).
+  sleep 8
+  LAST=$(tail -5 "${LOG_OUT}" 2>/dev/null | grep -cE "WebSocket closed|Reconnecting" || true)
+  if [[ "${LAST}" -gt 0 ]]; then
+    bad "daemon is in a connect/close loop - check: sudo tail -30 ${LOG_OUT}"
+  else
+    warn "no explicit registration line found but connection appears stable - verify the pool shows 1 daemon online in Cosmos"
+  fi
+fi
 
 # ---------- validation suite ----------
 echo; info "VALIDATION: OS boundary"
