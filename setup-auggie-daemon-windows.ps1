@@ -28,6 +28,7 @@ param(
   [int]   $MaxAgents   = -1,   # -1 = prompt; 0 = daemon default (100); N = cap
   [string[]]$ExtraWorkspaces = @(),
   [string]$DaemonName  = "$($env:COMPUTERNAME.ToLower())-bridge-01",
+  [ValidateSet("","task","service")][string]$RunMode = "",
   [switch]$Uninstall
 )
 $ErrorActionPreference = "Stop"
@@ -47,6 +48,11 @@ function Info($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 if ($Uninstall) {
   Info "Uninstalling..."
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+  if (Get-Service -Name $TaskName -ErrorAction SilentlyContinue) {
+    Stop-Service $TaskName -Force -ErrorAction SilentlyContinue
+    $nssmExe = Join-Path $Root "nssm\nssm.exe"
+    if (Test-Path $nssmExe) { & $nssmExe remove $TaskName confirm | Out-Null } else { sc.exe delete $TaskName | Out-Null }
+  }
   Get-Process -Name node -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "auggie" } |
     Stop-Process -Force -ErrorAction SilentlyContinue
@@ -114,6 +120,20 @@ if ($MaxAgents -lt 0) {
   $ma = Read-Host "Max concurrent agent sessions [Enter = daemon default (100); 4-5 recommended on 8-16GB hosts]"
   if ($ma) { $MaxAgents = [int]$ma } else { $MaxAgents = 0; WRN "using daemon default (100 slots); consider a cap on small hosts" }
 }
+
+if (-not $RunMode) {
+  Write-Host ""
+  Write-Host "How should the daemon run persistently?"
+  Write-Host "  [1] Scheduled Task (default) - starts at boot with no login, runs as the"
+  Write-Host "      service account, auto-restarts on failure. No third-party software."
+  Write-Host "      Managed in Task Scheduler (taskschd.msc), NOT in services.msc."
+  Write-Host "  [2] Windows Service (via NSSM) - appears in services.msc, supervised by the"
+  Write-Host "      Service Control Manager, works with SCOM/Datadog service monitoring."
+  Write-Host "      Downloads the open-source NSSM wrapper (nssm.cc) into C:\augment\nssm."
+  $rm = Read-Host "Choose [1/2, Enter = 1]"
+  if ($rm -eq "2") { $RunMode = "service" } else { $RunMode = "task" }
+}
+Info "Run mode: $RunMode (one mechanism only - the other is removed if present)"
 
 # ---------- service account ----------
 Info "Creating local service account '$SvcUser'"
@@ -204,29 +224,72 @@ Remove-Item $tmpCred -Force
 icacls $CredPath /inheritance:r | Out-Null
 icacls $CredPath /grant "${SvcUser}:R" "Administrators:F" | Out-Null
 
-# ---------- scheduled task ----------
-Info "Registering scheduled task '$TaskName' (runs as $SvcUser at startup)"
-Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+# ---------- persistence: scheduled task OR windows service (never both) ----------
 $argsLine = "daemon --pool-id $PoolId --augment-session-json `"$CredPath`" --workspace `"$RepoDir`""
 foreach ($w in $AddWsDirs) { $argsLine += " --add-workspace `"$w`"" }
 if ($MaxAgents -gt 0) { $argsLine += " --max-agents $MaxAgents" }
 $argsLine += " --allow-indexing --name $DaemonName"
-# Wrap in cmd /c so stdout/stderr land in the log (Task Scheduler captures nothing by itself)
-$cmdArg = '/c ""' + $AuggieCmd + '" ' + $argsLine + ' >> "' + $LogOut + '" 2>&1"'
-$action  = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument $cmdArg -WorkingDirectory $RepoDir
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-  -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 3650)
-$UserAccount = "$env:COMPUTERNAME\$SvcUser"   # Register-ScheduledTask cannot resolve the '.\user' shorthand
-try {
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -User $UserAccount -Password $pwPlain -RunLevel Limited -ErrorAction Stop | Out-Null
-  $pwPlain = $null
-  Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-  OK "task registered and started (as $UserAccount)"
-} catch {
-  $pwPlain = $null
-  throw "Scheduled task registration failed: $_  (verify svc-augment exists and has 'Log on as a batch job')"
+$UserAccount = "$env:COMPUTERNAME\$SvcUser"   # neither mechanism resolves the '.\user' shorthand reliably
+
+# Mutual exclusion: remove whichever mechanism is NOT chosen (and stale copies of the chosen one)
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+if (Get-Service -Name $TaskName -ErrorAction SilentlyContinue) {
+  Stop-Service $TaskName -Force -ErrorAction SilentlyContinue
+  sc.exe delete $TaskName | Out-Null
+  Start-Sleep 2
+}
+
+if ($RunMode -eq "task") {
+  Info "Registering scheduled task '$TaskName' (runs as $SvcUser at startup)"
+  # Wrap in cmd /c so stdout/stderr land in the log (Task Scheduler captures nothing by itself)
+  $cmdArg = '/c ""' + $AuggieCmd + '" ' + $argsLine + ' >> "' + $LogOut + '" 2>&1"'
+  $action  = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument $cmdArg -WorkingDirectory $RepoDir
+  $trigger = New-ScheduledTaskTrigger -AtStartup
+  $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 3650)
+  try {
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
+      -User $UserAccount -Password $pwPlain -RunLevel Limited -ErrorAction Stop | Out-Null
+    $pwPlain = $null
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    OK "task registered and started (as $UserAccount)"
+  } catch {
+    $pwPlain = $null
+    throw "Scheduled task registration failed: $_  (verify svc-augment exists and has 'Log on as a batch job')"
+  }
+} else {
+  Info "Installing Windows Service '$TaskName' via NSSM (runs as $SvcUser, auto-start)"
+  $NssmDir = Join-Path $Root "nssm"
+  $NssmExe = Join-Path $NssmDir "nssm.exe"
+  if (-not (Test-Path $NssmExe)) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $zip = Join-Path $env:TEMP "nssm.zip"
+    Invoke-WebRequest "https://nssm.cc/release/nssm-2.24.zip" -OutFile $zip
+    Expand-Archive $zip -DestinationPath $env:TEMP\nssm-x -Force
+    New-Item -ItemType Directory -Force -Path $NssmDir | Out-Null
+    Copy-Item "$env:TEMP\nssm-x\nssm-2.24\win64\nssm.exe" $NssmExe -Force
+    Remove-Item $zip -Force; Remove-Item "$env:TEMP\nssm-x" -Recurse -Force
+  }
+  try {
+    & $NssmExe install $TaskName "$env:SystemRoot\System32\cmd.exe" | Out-Null
+    & $NssmExe set $TaskName AppParameters ('/c ""' + $AuggieCmd + '" ' + $argsLine + '"') | Out-Null
+    & $NssmExe set $TaskName AppDirectory $RepoDir | Out-Null
+    & $NssmExe set $TaskName AppStdout $LogOut | Out-Null
+    & $NssmExe set $TaskName AppStderr $LogOut | Out-Null
+    & $NssmExe set $TaskName AppExit Default Restart | Out-Null
+    & $NssmExe set $TaskName AppRestartDelay 5000 | Out-Null
+    & $NssmExe set $TaskName Start SERVICE_AUTO_START | Out-Null
+    & $NssmExe set $TaskName ObjectName $UserAccount $pwPlain | Out-Null   # NSSM grants 'Log on as a service'
+    $pwPlain = $null
+    & $NssmExe start $TaskName | Out-Null
+    Start-Sleep 3
+    $svc = Get-Service $TaskName -ErrorAction Stop
+    if ($svc.Status -ne "Running") { throw "service state: $($svc.Status)" }
+    OK "Windows Service '$TaskName' installed and running (as $UserAccount) - visible in services.msc"
+  } catch {
+    $pwPlain = $null
+    throw "Windows Service install failed: $_  (check $LogOut and: nssm.exe status $TaskName)"
+  }
 }
 
 Info "Waiting up to 90s for the daemon process"
@@ -290,8 +353,15 @@ FINAL HARDENING (apply LAST, after everything works):
   secpol.msc > Local Policies > User Rights Assignment > "Deny log on locally" > add $SvcUser
 
 Ops:
-  status:    Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo
+$(if ($RunMode -eq "task") {
+"  status:    Get-ScheduledTask -TaskName $TaskName | Get-ScheduledTaskInfo   (LastTaskResult 267009 = running)
   restart:   Stop-ScheduledTask -TaskName $TaskName; Start-ScheduledTask -TaskName $TaskName
-  uninstall: .\setup-auggie-daemon-windows.ps1 -Uninstall
+  note:      lives in Task Scheduler (taskschd.msc), NOT services.msc"
+} else {
+"  status:    Get-Service $TaskName    (also visible in services.msc)
+  restart:   Restart-Service $TaskName"
+})
+  logs:      Get-Content $LogOut -Tail 30
+  uninstall: .\setup-auggie-daemon-windows.ps1 -Uninstall   (removes task or service)
 "@ | Write-Host
 if ($script:Fail -gt 0) { exit 1 }
