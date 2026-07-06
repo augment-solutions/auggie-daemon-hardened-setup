@@ -18,7 +18,7 @@ set -euo pipefail
 SVC_USER="${SVC_USER:-svc-augment}"
 SVC_HOME="/srv/augment"
 WORKSPACE="${WORKSPACE:-${SVC_HOME}/workspace}"
-MAX_AGENTS="${MAX_AGENTS:-4}"
+# MAX_AGENTS: blank = daemon default (100); set a number to cap
 DAEMON_NAME="${DAEMON_NAME:-$(hostname -s)-bridge-01}"
 HARDENING="${HARDENING:-strict}"   # strict | full | off
 UNIT="/etc/systemd/system/auggie-daemon.service"
@@ -96,8 +96,35 @@ node -e '
   console.log("  credential OK (tenant: " + s.tenantURL + ")");
 ' "${SESSION_TMP}" || die "Credential validation failed."
 
-if [[ -z "${REPO_URL:-}" ]]; then
-  read -r -p "Git repo URL to clone into the workspace (blank = create empty sandbox repo): " REPO_URL
+# Max agents: Enter = keep daemon's own default (100)
+if [[ -z "${MAX_AGENTS+x}" ]]; then
+  read -r -p "Max concurrent agent sessions [Enter = daemon default (100); 4-5 recommended on 8-16GB hosts]: " MAX_AGENTS
+fi
+if [[ -n "${MAX_AGENTS}" ]]; then
+  [[ "${MAX_AGENTS}" =~ ^[0-9]+$ ]] || die "Max agents must be a number or blank."
+else
+  warn "using daemon default (100 slots); consider a cap on small hosts"
+fi
+
+# Workspaces: git URL (cloned) or existing local path (COPIED) or blank sandbox
+WS_SOURCES=()
+if [[ -n "${WORKSPACE_SRC+x}" ]]; then
+  [[ -n "${WORKSPACE_SRC}" ]] && WS_SOURCES+=("${WORKSPACE_SRC}")
+  if [[ -n "${EXTRA_WORKSPACES:-}" ]]; then
+    IFS=',' read -r -a _extra <<< "${EXTRA_WORKSPACES}"
+    for e in "${_extra[@]}"; do [[ -n "${e}" ]] && WS_SOURCES+=("${e}"); done
+  fi
+else
+  echo
+  echo "Workspaces: enter a git URL (cloned) OR an existing local path (COPIED"
+  echo "into the service account's workspace; the original is not touched)."
+  read -r -p "Primary workspace (git URL / local path / blank for sandbox): " FIRST
+  [[ -n "${FIRST}" ]] && WS_SOURCES+=("${FIRST}")
+  while true; do
+    read -r -p "Add another workspace? (git URL / local path / blank to finish): " MORE
+    [[ -z "${MORE}" ]] && break
+    WS_SOURCES+=("${MORE}")
+  done
 fi
 
 # ---------- service account ----------
@@ -129,26 +156,59 @@ AUGGIE_BIN="${SVC_HOME}/.npm-global/bin/auggie"
 [[ -x "${AUGGIE_BIN}" ]] || die "auggie not found at ${AUGGIE_BIN}"
 ok "auggie installed"
 
-# ---------- repo ----------
-REPO_DIR="${WORKSPACE}/repo-a"
-if [[ ! -d "${REPO_DIR}/.git" ]]; then
-  if [[ -n "${REPO_URL}" ]]; then
-    sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && git clone '${REPO_URL}' '${REPO_DIR}'" || die "git clone failed."
+# ---------- materialize workspaces ----------
+materialize_ws() {  # $1 = source; echoes destination
+  local src="$1" name dest
+  if [[ -d "${src}" ]]; then
+    name=$(basename "${src}"); dest="${WORKSPACE}/${name}"
+    if [[ ! -d "${dest}" ]]; then
+      echo "    copying local path ${src} -> ${dest}" >&2
+      cp -R "${src}" "${dest}"
+      chown -R "${SVC_USER}:${SVC_USER}" "${dest}"
+      if [[ ! -d "${dest}/.git" ]]; then
+        sudo -u "${SVC_USER}" -H bash -c "
+          cd '${dest}' && git init -q && git config user.email 'svc@localhost' &&
+          git config user.name '${SVC_USER}' && git add -A && git commit -qm import"
+      fi
+    fi
   else
+    name=$(basename "${src}" .git); dest="${WORKSPACE}/${name}"
+    if [[ ! -d "${dest}" ]]; then
+      echo "    cloning ${src} -> ${dest}" >&2
+      sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && git clone '${src}' '${dest}'" \
+        || die "git clone failed for ${src}"
+    fi
+  fi
+  echo "${dest}"
+}
+
+WS_DIRS=()
+if [[ ${#WS_SOURCES[@]} -eq 0 ]]; then
+  REPO_DIR="${WORKSPACE}/sandbox"
+  if [[ ! -d "${REPO_DIR}/.git" ]]; then
     sudo -u "${SVC_USER}" -H bash -c "
       cd '${SVC_HOME}' &&
       git init -q '${REPO_DIR}' && cd '${REPO_DIR}' &&
       git config user.email 'svc@localhost' && git config user.name 'svc-augment' &&
       echo '# sandbox' > README.md && git add . && git commit -qm init"
-    warn "no repo URL; created empty sandbox repo (worktrees need a git repo)"
+    warn "no workspace given; created empty sandbox repo"
   fi
+  WS_DIRS+=("${REPO_DIR}")
+else
+  for src in "${WS_SOURCES[@]}"; do WS_DIRS+=("$(materialize_ws "${src}")"); done
 fi
+REPO_DIR="${WS_DIRS[0]}"
 
 # ---------- credential ----------
 info "Installing credential (0600)"
 install -o "${SVC_USER}" -g "${SVC_USER}" -m 600 "${SESSION_TMP}" "${SVC_HOME}/.augment/session.json"
 
 # ---------- systemd unit ----------
+ADD_WS_ARGS=""
+for ((i=1; i<${#WS_DIRS[@]}; i++)); do ADD_WS_ARGS+=" --add-workspace ${WS_DIRS[$i]}"; done
+MAX_AGENTS_ARG=""
+[[ -n "${MAX_AGENTS}" ]] && MAX_AGENTS_ARG=" --max-agents ${MAX_AGENTS}"
+
 info "Writing systemd unit (${HARDENING} hardening)"
 HARDEN_BLOCK=""
 case "${HARDENING}" in
@@ -170,7 +230,7 @@ Group=${SVC_USER}
 Environment=HOME=${SVC_HOME}
 Environment=PATH=${SVC_HOME}/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=${REPO_DIR}
-ExecStart=${AUGGIE_BIN} daemon --pool-id ${POOL_ID} --workspace ${REPO_DIR} --max-agents ${MAX_AGENTS} --allow-indexing --name ${DAEMON_NAME}
+ExecStart=${AUGGIE_BIN} daemon --pool-id ${POOL_ID} --workspace ${REPO_DIR}${ADD_WS_ARGS}${MAX_AGENTS_ARG} --allow-indexing --name ${DAEMON_NAME}
 Restart=always
 RestartSec=5
 ${HARDEN_BLOCK}

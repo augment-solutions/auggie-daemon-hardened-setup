@@ -73,6 +73,12 @@ Set-ExecutionPolicy -Scope Process Bypass
    - credential file is owner-only
 8. Prints the four manual checks that need Cosmos: pool shows 1 daemon online, a live agent gets "permission denied" reading a real user's files, session attribution shows the service account, and a non-connector identity is rejected with "daemon user is not the daemon pool connector".
 
+## Onboarding prompts (v2.0)
+
+- **Pool ID:** bare UUIDs are auto-prefixed with `pool-`.
+- **Max agents:** press Enter to keep the daemon's own default (100 slots). Enter a number to cap it; 4-5 is recommended on 8-16 GB hosts since each active session can use 0.5-2 GB RAM.
+- **Workspaces:** each prompt accepts a git URL (cloned as the service account) or an existing local path (COPIED into the service account's workspace; the original is untouched and later edits don't sync - refresh with rsync if needed). Blank creates an empty sandbox repo. Add as many as you want; extras become `--add-workspace` flags.
+
 ## Tuning
 
 - `MAX_AGENTS` (default 4): each concurrent session can use 0.5 to 2 GB RAM; keep 4-5 on an 8-16 GB host and archive completed sessions in Cosmos to reclaim memory.

@@ -25,7 +25,8 @@ param(
   [string]$PoolId      = $env:POOL_ID,
   [string]$SessionJson = $env:SESSION_JSON_PATH,
   [string]$RepoUrl     = $env:REPO_URL,
-  [int]   $MaxAgents   = 4,
+  [int]   $MaxAgents   = -1,   # -1 = prompt; 0 = daemon default (100); N = cap
+  [string[]]$ExtraWorkspaces = @(),
   [string]$DaemonName  = "$($env:COMPUTERNAME.ToLower())-bridge-01",
   [switch]$Uninstall
 )
@@ -108,7 +109,11 @@ try {
   OK "credential OK (tenant: $($s.tenantURL))"
 } catch { throw "Credential validation failed: $_" }
 
-if (-not $RepoUrl) { $RepoUrl = Read-Host "Git repo URL to clone into the workspace (blank = empty sandbox repo)" }
+if (-not $RepoUrl) { $RepoUrl = Read-Host "Primary workspace (git URL to clone / existing local path to COPY / blank = sandbox)" }
+if ($MaxAgents -lt 0) {
+  $ma = Read-Host "Max concurrent agent sessions [Enter = daemon default (100); 4-5 recommended on 8-16GB hosts]"
+  if ($ma) { $MaxAgents = [int]$ma } else { $MaxAgents = 0; WRN "using daemon default (100 slots); consider a cap on small hosts" }
+}
 
 # ---------- service account ----------
 Info "Creating local service account '$SvcUser'"
@@ -145,10 +150,28 @@ New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
 icacls $Root /inheritance:r | Out-Null
 icacls $Root /grant "${SvcUser}:(OI)(CI)M" "Administrators:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
 
-# repo (clone as admin, then the ACL above already grants the service account)
+# repo (clone/copy as admin; the ACL above already grants the service account)
+$AddWsDirs = @()
+function Materialize-Ws([string]$src) {
+  if (Test-Path $src -PathType Container) {
+    $dest = Join-Path $Workspace (Split-Path $src -Leaf)
+    if (-not (Test-Path $dest)) {
+      Write-Host "    copying local path $src -> $dest"
+      Copy-Item $src $dest -Recurse
+      if (-not (Test-Path (Join-Path $dest ".git"))) {
+        Push-Location $dest; git init -q; git config user.email "svc@localhost"; git config user.name "svc-augment"; git add -A; git commit -qm import; Pop-Location
+      }
+    }
+    return $dest
+  } else {
+    $dest = Join-Path $Workspace ((Split-Path $src -Leaf) -replace "\.git$","")
+    if (-not (Test-Path $dest)) { git clone $src $dest }
+    return $dest
+  }
+}
 if (-not (Test-Path (Join-Path $RepoDir ".git"))) {
   if ($RepoUrl) {
-    git clone $RepoUrl $RepoDir
+    $RepoDir = Materialize-Ws $RepoUrl
   } else {
     New-Item -ItemType Directory -Force -Path $RepoDir | Out-Null
     Push-Location $RepoDir
@@ -158,6 +181,7 @@ if (-not (Test-Path (Join-Path $RepoDir ".git"))) {
     WRN "no repo URL; created empty sandbox repo (worktrees need a git repo)"
   }
 }
+foreach ($w in $ExtraWorkspaces) { if ($w) { $AddWsDirs += (Materialize-Ws $w) } }
 
 # ---------- credential ----------
 Info "Installing credential with owner-only ACL"
@@ -169,7 +193,10 @@ icacls $CredPath /grant "${SvcUser}:R" "Administrators:F" | Out-Null
 # ---------- scheduled task ----------
 Info "Registering scheduled task '$TaskName' (runs as $SvcUser at startup)"
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-$argsLine = "daemon --pool-id $PoolId --augment-session-json `"$CredPath`" --workspace `"$RepoDir`" --max-agents $MaxAgents --allow-indexing --name $DaemonName"
+$argsLine = "daemon --pool-id $PoolId --augment-session-json `"$CredPath`" --workspace `"$RepoDir`""
+foreach ($w in $AddWsDirs) { $argsLine += " --add-workspace `"$w`"" }
+if ($MaxAgents -gt 0) { $argsLine += " --max-agents $MaxAgents" }
+$argsLine += " --allow-indexing --name $DaemonName"
 $action  = New-ScheduledTaskAction -Execute $AuggieCmd -Argument $argsLine -WorkingDirectory $RepoDir
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
