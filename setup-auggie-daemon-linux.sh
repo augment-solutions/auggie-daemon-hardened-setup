@@ -106,6 +106,9 @@ fi
 mkdir -p "${WORKSPACE}" "${SVC_HOME}/.augment" "${SVC_HOME}/.npm-global"
 chown -R "${SVC_USER}:${SVC_USER}" "${SVC_HOME}"
 chmod 750 "${SVC_HOME}"
+# Move into a directory the service account can read so sudo-spawned shells
+# don't emit getcwd warnings when the installer runs from a 700 home dir.
+cd "${SVC_HOME}"
 
 # ---------- auggie ----------
 # NOTE: commands run as ${SVC_USER} must cd into its own home first; the

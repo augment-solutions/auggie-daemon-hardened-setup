@@ -138,6 +138,11 @@ info "Preparing directories"
 mkdir -p "${WORKSPACE}" "${SVC_HOME}/.augment" "${SVC_HOME}/.npm-global"
 chown -R "${SVC_USER}:${SVC_USER}" "${SVC_HOME}"
 chmod 750 "${SVC_HOME}"
+# Move the script itself into a directory the service account can read, so
+# sudo-spawned shells don't emit "shell-init: getcwd" warnings when the
+# installer is launched from inside a 700 home directory. (Credential was
+# already copied to a temp file above, so no relative paths break.)
+cd "${SVC_HOME}"
 
 # ---------- install auggie under the service account ----------
 # NOTE: every command run as ${SVC_USER} must cd into its own home first.
@@ -254,7 +259,9 @@ if [[ -n "${DPID}" ]]; then
   [[ "${PUSER}" == "${SVC_USER}" ]] && ok "daemon runs as ${SVC_USER} (pid ${DPID})" || bad "daemon runs as ${PUSER}"
   # Only NON-LOOPBACK listeners are a network exposure. Local 127.0.0.1/::1
   # listeners (Node IPC etc.) are unreachable from the network.
-  ALL_LISTEN=$(lsof -p "${DPID}" -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' || true)
+  # NOTE: lsof ORs selection filters by default; -a is required to AND them,
+  # otherwise this returns every TCP listener on the machine + all daemon fds.
+  ALL_LISTEN=$(lsof -a -p "${DPID}" -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' || true)
   EXT_LISTEN=$(printf '%s\n' "${ALL_LISTEN}" | grep -vE '^(127\.0\.0\.1|\[::1\]|localhost):' | grep -v '^$' || true)
   if [[ -n "${EXT_LISTEN}" ]]; then
     bad "daemon listening on a NON-loopback address: $(echo "${EXT_LISTEN}" | tr '\n' ' ')"
