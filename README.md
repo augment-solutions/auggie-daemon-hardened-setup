@@ -151,6 +151,13 @@ Every finding below came from real installs during field testing on macOS, Ubunt
 
 Repository release tags (for example, `v2.4.0`) version this installer and deployment bundle. They are independent of the Auggie CLI version selected with `AUGGIE_VERSION` / `-AuggieVersion` or the Helm `auggie.version` value. Tags are immutable release points. When a security fix also applies to an older supported release line, it may be issued as a patch release from that line after the affected platforms are requalified; customers do not need to adopt the GCP deployment bundle to consume an installer-only backport.
 
+**v2.4.1 - GKE bootstrap correction and live security qualification** (GCP deployments)
+- Corrected bootstrap initialization for root-owned/fsGroup-writable GKE volumes by replacing filesystem-sensitive directory rename with locked direct copy, final-runtime preflight, marker-last completion, and known-partial cleanup.
+- Added a writable init-container `/tmp`, a preinstalled control image, and container regression coverage for owner-owned and Kubernetes-style fsGroup volumes.
+- Qualified private GKE Autopilot registration, restart recovery, NetworkPolicy enforcement, Secret Manager rotation, and a real Cosmos-routed session.
+- Validated reference-only application GSM resolution through native ADC/WIF, including unrelated-secret denial, exact KSA audit attribution, non-persistence checks, and live revocation after a measured 72-second IAM propagation window.
+- Documented that native ADC requires narrowly scoped GKE metadata-server egress and that the pilot does not prevent an authorized agent process from deliberately outputting or exfiltrating a value it resolves.
+
 **v2.4.0 - Security audit hardening and customer-hosted GCP deployments** (all platforms)
 - Eliminated user-controlled shell interpolation in Unix workspace setup, escaped generated systemd/plist arguments, validated pool/account/daemon/path inputs, and rejected managed-path symlinks/reparse points.
 - Pinned the Auggie package version and made installed daemon binaries read-only to the service account after installation.

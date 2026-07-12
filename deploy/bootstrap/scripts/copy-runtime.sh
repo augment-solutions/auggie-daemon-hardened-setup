@@ -7,7 +7,7 @@ umask 022
 SOURCE_ROOT=/opt/auggie-runtime
 EXPECTED_MARKER='node=22.23.1;auggie=0.32.0'
 lock=
-stage=
+copy_started=
 
 fail() {
     printf 'copy-runtime: %s\n' "$*" >&2
@@ -15,8 +15,15 @@ fail() {
 }
 
 cleanup() {
-    if [ -n "${stage}" ] && [ -d "${stage}" ]; then
-        rm -rf -- "${stage}"
+    if [ -n "${copy_started}" ]; then
+        chmod u+w -- "${destination}" 2>/dev/null || :
+        for partial in node npm manifest.env .bootstrap-complete.tmp; do
+            partial_path=${destination}/${partial}
+            if [ -e "${partial_path}" ] || [ -L "${partial_path}" ]; then
+                chmod -R u+w -- "${partial_path}" 2>/dev/null || :
+                rm -rf -- "${partial_path}"
+            fi
+        done
     fi
     if [ -n "${lock}" ] && [ -d "${lock}" ]; then
         rmdir -- "${lock}" 2>/dev/null || :
@@ -80,20 +87,18 @@ for entry in "${destination}"/* "${destination}"/.[!.]* "${destination}"/..?*; d
     [ "${entry}" = "${lock}" ] || fail "destination must be empty on first copy"
 done
 
-stage=${destination}/.bootstrap-stage.$$
-mkdir -- "${stage}"
-cp -R -- "${SOURCE_ROOT}/." "${stage}/"
-/usr/local/bin/preflight-runtime "${stage}"
-
-mv -- "${stage}/node" "${destination}/node"
-mv -- "${stage}/npm" "${destination}/npm"
-mv -- "${stage}/manifest.env" "${destination}/manifest.env"
-rmdir -- "${stage}"
-stage=
+copy_started=1
+cp -R -- "${SOURCE_ROOT}/." "${destination}/"
+# cp applies the immutable source root's mode to destination. Restore only the
+# volume root's owner-write bit when needed and permitted. Kubernetes fsGroup
+# volumes can already be writable without being owned by this process.
+[ -w "${destination}" ] || chmod u+w -- "${destination}"
+/usr/local/bin/preflight-runtime "${destination}"
 
 printf '%s\n' "${EXPECTED_MARKER}" > "${marker}.tmp"
 chmod 0444 "${marker}.tmp"
 mv -- "${marker}.tmp" "${marker}"
+copy_started=
 rmdir -- "${lock}"
 lock=
 

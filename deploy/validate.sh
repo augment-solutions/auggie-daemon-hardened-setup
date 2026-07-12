@@ -50,5 +50,9 @@ terraform -chdir="${ROOT}/deploy/gce/terraform" fmt -check -diff
 grep -Fq '/opt/auggie/npm/bin/auggie' "${ROOT}/deploy/gce/startup-container.sh"
 grep -Fq '%s/npm/bin/auggie' "${CHART}/templates/_helpers.tpl"
 grep -Fq -- '--augment-session-json' "${ROOT}/setup-auggie-daemon-linux.sh"
+grep -Fq 'BOOTSTRAP_IMAGE' "${ROOT}/deploy/preinstalled/Dockerfile"
+grep -Fq 'run_fs_group_case' "${ROOT}/deploy/bootstrap/tests/smoke.sh"
+grep -Fq "[ -w \"\${destination}\" ] || chmod u+w" \
+  "${ROOT}/deploy/bootstrap/scripts/copy-runtime.sh"
 
 printf 'All local deployment validations passed.\n'

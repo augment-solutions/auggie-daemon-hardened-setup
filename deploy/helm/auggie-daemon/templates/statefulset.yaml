@@ -85,6 +85,8 @@ spec:
           volumeMounts:
             - name: runtime
               mountPath: /runtime
+            - name: tmp
+              mountPath: /tmp
         {{- else if eq .Values.bootstrap.mode "runtimeNpm" }}
         - name: install-auggie-runtime
           image: {{ include "auggie-daemon.image" . | quote }}

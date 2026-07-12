@@ -126,6 +126,17 @@ bootstrap image as root merely to work around an incorrectly owned volume.
 
 ## Smoke tests
 
+Run the automated Linux container suite before publishing:
+
+```sh
+./tests/smoke.sh 'registry.example/auggie-bootstrap@sha256:<digest>'
+```
+
+It validates fresh and idempotent copy, final preflight, read-only root operation,
+user-owned and Kubernetes-style root-owned/fsGroup-writable volumes, and unsafe
+destination rejection. The GKE fsGroup case is important: a volume can be
+writable to the runtime group without being owned or chmod-capable by UID 1000.
+
 The following Linux Docker test exercises the default non-root user, copy, preflight, PATH resolution, and CLI startup using a UID/GID-owned tmpfs:
 
 ```sh
