@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and set values from your environment. No secret value
+# belongs in this file; session_secret_id identifies a Secret Manager resource.
+# project_id                  = "..."
+# region                      = "..."
+# zones                       = ["...", "..."]
+# deployment_mode             = "direct" # or "container"
+# source_image                = "https://www.googleapis.com/compute/v1/projects/.../global/images/..."
+# runtime_image               = null # container mode: private Rocky 8 image at ...@sha256:<64 hex chars>
+# bootstrap_image             = null # container mode: ...@sha256:<64 hex chars>
+# machine_type                = "..."
+# target_size                 = 2
+# network                     = "https://www.googleapis.com/compute/v1/projects/.../global/networks/..."
+# subnetwork                  = "https://www.googleapis.com/compute/v1/projects/.../regions/.../subnetworks/..."
+# service_account_email       = "..."
+# secret_project_id           = "..."
+# session_secret_id           = "..."
+# artifact_registry_project_id = null # required in container mode
+# pool_id                     = "pool-00000000-0000-0000-0000-000000000000"

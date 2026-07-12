@@ -1,0 +1,36 @@
+# Replace every placeholder. This file contains references only, never secret data.
+image:
+  repository: us-central1-docker.pkg.dev/MY_PROJECT/augment/rocky8-auggie
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000 # replace
+  pullPolicy: IfNotPresent
+
+daemon:
+  poolId: pool-00000000-0000-0000-0000-000000000000 # replace with the real pool ID
+  namePrefix: production-auggie-
+  maxAgents: 20
+
+bootstrap:
+  mode: bootstrapImage
+  auggieVersion: "0.32.0"
+  bootstrapImage:
+    repository: us-central1-docker.pkg.dev/MY_PROJECT/augment/auggie-bootstrap
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000 # replace
+    pullPolicy: IfNotPresent
+
+workspace:
+  mode: persistent
+  persistence:
+    storageClass: premium-rwo
+    size: 50Gi
+
+credentials:
+  mode: secretProviderClass
+  sessionFile: augment-session.json
+  secretProviderClass:
+    create: true
+    secrets:
+      - resourceName: projects/MY_PROJECT_NUMBER/secrets/augment-session/versions/latest
+        path: augment-session.json
+
+serviceAccount:
+  create: true

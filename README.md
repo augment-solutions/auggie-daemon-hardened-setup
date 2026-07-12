@@ -2,13 +2,18 @@
 
 One script per OS that provisions everything needed to run the [Auggie daemon](https://docs.augmentcode.com) under a **dedicated, least-privileged local service account** linked to an **Augment Service Account** (Cosmos identity), then **validates the security boundary** automatically.
 
-Why: by default the daemon runs with the full OS permissions of whoever launches it. These installers make the daemon run as a locked-down account instead, so Cosmos agents can only reach the workspace you assign, never user files, SSH keys, or system resources.
+Why: by default the daemon runs with the full OS permissions of whoever launches it. These installers instead run it as a dedicated account, preventing access to other users' private files and preventing writes outside the managed daemon tree in strict mode.
 
 | OS | Script | Runs the daemon via |
 |---|---|---|
 | macOS | `setup-auggie-daemon-macos.sh` | LaunchDaemon (hidden service user) |
 | Linux / WSL2 | `setup-auggie-daemon-linux.sh` | Hardened systemd unit (`ProtectHome`, `ProtectSystem=strict`) |
 | Windows (native) | `setup-auggie-daemon-windows.ps1` | Your choice at onboarding: Scheduled Task (default) or Windows Service via WinSW - both as a local service account |
+
+For customer-owned Google Cloud deployments using private Rocky Linux 8 images,
+see [`deploy/README.md`](deploy/README.md). The bundle includes GKE Standard and
+Autopilot Helm profiles, a customer-built bootstrap runtime, and direct-host or
+rootless-container GCE/MIG options with Google Secret Manager integration.
 
 On Windows, **WSL2 + the Linux script is the recommended path** (WSL is the officially supported Windows platform for the CLI, and the systemd sandboxing is the strongest boundary). The native PowerShell script is for hosts where WSL isn't an option.
 
@@ -26,6 +31,17 @@ The `session.json` downloads via browser on the admin's machine. It is a bearer 
 - **Never** email it, put it in chat, commit it, or place it in a shared drive. If it may have been exposed, revoke the token in the Service Accounts page and issue a new one.
 
 The scripts validate the JSON before installing: it must contain `accessToken`, `tenantURL`, **and** `scopes` as an array. A missing `scopes` array is silently rejected by the CLI and is the single most common cause of "auth worked yesterday" failures.
+
+## Security boundary and trust model
+
+These installers reduce host access; they do **not** create a complete sandbox for mutually untrusted agents:
+
+- Agent commands run as the same service account as the daemon. That identity can read its own Augment session credential and everything in its workspace. OS file permissions cannot distinguish the daemon from child commands using the same identity.
+- Linux `strict` mode makes files outside `/srv/augment` read-only and hides user homes, but normal world-readable system files remain readable. It does not restrict outbound destinations.
+- macOS and Windows enforce account and filesystem boundaries but do not provide Linux mount-namespace isolation.
+- A writable workspace intentionally permits code changes. The installed Auggie CLI and Windows service wrapper are made read-only to the service account to prevent agent-level persistence through executable replacement.
+
+Use a dedicated, least-privileged Augment Service Account for each trust boundary, restrict who can route sessions to its pool, apply Auggie tool-permission policies, restrict egress at the host/network layer when needed, and rotate the token after any potentially untrusted session. For hostile multi-tenant workloads, use an ephemeral VM or container boundary per tenant/session rather than relying on these account installers alone.
 
 ## Usage
 
@@ -45,7 +61,8 @@ chmod +x setup-auggie-daemon-linux.sh
 sudo ./setup-auggie-daemon-linux.sh
 # hardening levels: HARDENING=strict (default) | full | off
 sudo POOL_ID=pool-xxxx SESSION_JSON_PATH=/tmp/session.json HARDENING=strict \
-  WORKSPACE_SRC=git@github.com:org/repo.git MAX_AGENTS=4 ./setup-auggie-daemon-linux.sh
+  WORKSPACE_SRC=git@github.com:org/repo.git MAX_AGENTS=4 AUGGIE_VERSION=0.32.0 \
+  ./setup-auggie-daemon-linux.sh
 ```
 WSL2 note: enable systemd first (`/etc/wsl.conf` → `[boot]\nsystemd=true`, then `wsl --shutdown`).
 
@@ -66,7 +83,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 1. Preflight: Node 22+ (20 minimum) and git.
 2. Prompts for pool ID, credential (path or hidden multi-line paste), max agents (Enter = daemon default), one or more workspaces (git URL / local path / sandbox), and on Windows the run mode (Scheduled Task or Windows Service). All overridable via env vars/parameters for unattended installs.
 3. Creates the locked-down account: hidden non-admin user with a dedicated primary group (macOS), `--system` account with `nologin` and home outside `/home` (Linux), non-admin local user with batch + service logon rights (Windows).
-4. Installs auggie where the service account can execute it: under its own npm prefix (macOS/Linux) or inside the ACL'd `C:\augment\npm` tree (Windows - a per-user npm install under the admin's profile is unreachable by the service account and fails; Windows enforces auggie >= 0.28.0). Clones/copies your workspaces (or creates a git sandbox so worktrees function).
+4. Installs a pinned Auggie version (default `0.32.0`, overridable with `AUGGIE_VERSION` / `-AuggieVersion`) where the service account can execute but not modify it: under a root-owned npm prefix (macOS/Linux) or inside the ACL'd `C:\augment\npm` tree (Windows; Windows enforces auggie >= 0.28.0). Clones/copies your workspaces or creates a git sandbox so worktrees function.
 5. Installs the credential at the service account's `~/.augment/session.json` (macOS/Linux) or via `--augment-session-json` (Windows), locked to owner-only.
 6. Registers the always-on wrapper (LaunchDaemon / systemd / Scheduled Task or WinSW service) and waits for real pool **registration** in the logs (macOS/Linux) or the daemon process running as the service account (Windows) - a mere websocket handshake is not treated as success, and known Cosmos rejections are diagnosed in plain English.
 7. Runs the validation suite and prints PASS/FAIL:
@@ -89,7 +106,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 - `MAX_AGENTS` (default: the daemon's own 100 slots when left blank): each concurrent session can use 0.5 to 2 GB RAM, so set 4-5 on an 8-16 GB host and archive completed sessions in Cosmos to reclaim memory. Leave blank only on hosts sized for it.
 - Linux `HARDENING=strict` makes the whole filesystem read-only to agents outside `/srv/augment`. If a workflow legitimately needs other paths, add `ReadWritePaths=` lines to the unit or use `HARDENING=full`.
 - Never point `--workspace` at the account's home directory itself; indexing is blocked there and pool sessions will fail to start.
-- Keep the CLI updated on the host (`npm update -g @augmentcode/auggie`); long-running daemons don't auto-update.
+- The installer pins Auggie to `0.32.0` by default to avoid silently installing a different release. Upgrade explicitly by rerunning the installer with `AUGGIE_VERSION=x.y.z` (macOS/Linux) or `-AuggieVersion x.y.z` (Windows), then re-run validation.
 
 ## Validated environments and support status
 
@@ -131,6 +148,16 @@ Every configuration below was executed end to end against a **live Cosmos daemon
 ## Version history
 
 Every finding below came from real installs during field testing on macOS, Ubuntu, and Windows Server - all validated end to end against a live Cosmos pool. Nine real defects were caught this way; each entry names the failure and the fix.
+
+Repository release tags (for example, `v2.4.0`) version this installer and deployment bundle. They are independent of the Auggie CLI version selected with `AUGGIE_VERSION` / `-AuggieVersion` or the Helm `auggie.version` value. Tags are immutable release points. When a security fix also applies to an older supported release line, it may be issued as a patch release from that line after the affected platforms are requalified; customers do not need to adopt the GCP deployment bundle to consume an installer-only backport.
+
+**v2.4.0 - Security audit hardening and customer-hosted GCP deployments** (all platforms)
+- Eliminated user-controlled shell interpolation in Unix workspace setup, escaped generated systemd/plist arguments, validated pool/account/daemon/path inputs, and rejected managed-path symlinks/reparse points.
+- Pinned the Auggie package version and made installed daemon binaries read-only to the service account after installation.
+- Added WinSW SHA-256 verification, cryptographic Windows password generation, in-process Windows account/service configuration, guaranteed temporary-credential cleanup, and precise daemon process discovery.
+- Corrected the documented trust boundary: same-identity agent commands can read the daemon's own credential, world-readable files and allowed network destinations; use ephemeral tenant/session isolation for hostile workloads.
+- Added the customer-hosted `deploy/` bundle: a production Helm chart for GKE Standard and Autopilot, hardened and standard profiles, StatefulSet workspace/PVC modes, Workload Identity and Secret Manager CSI integration, customer-built Rocky Linux 8-compatible bootstrap runtime, GCE direct/rootless-container startup paths, Terraform examples, and local validation automation.
+- Validated shell syntax/static analysis, Helm lint/rendering and negative configuration cases, Kubernetes schemas, Terraform formatting, integration assertions, and secret-pattern checks. Customer image builds and live GKE/GCE canaries remain environment-specific release qualification steps.
 
 **v2.3.2 - Service logon fix: SYSTEM escalation caught by validation** (Windows)
 - Field testing caught the service running as **LocalSystem**: WinSW v2 and v3 use different `serviceaccount` schemas, and a v3-style block is silently ignored by v2.12, defaulting the service to SYSTEM. The validation suite's process-owner check flagged it immediately.

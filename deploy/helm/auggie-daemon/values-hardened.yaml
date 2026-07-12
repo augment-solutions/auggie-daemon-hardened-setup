@@ -1,0 +1,19 @@
+# Additional isolation controls. The base chart already enforces restricted contexts.
+replicaCount: 2
+
+workspace:
+  mode: persistent
+  persistence:
+    size: 20Gi
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  allowDns: true
+  allowHttpsEgress: true
+
+serviceAccount:
+  automountServiceAccountToken: false

@@ -1,0 +1,11 @@
+# General production baseline. Supply image, pool, and credential values separately.
+replicaCount: 2
+
+workspace:
+  mode: persistent
+  persistence:
+    size: 20Gi
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

@@ -1,0 +1,42 @@
+{{- $validated := include "auggie-daemon.validate" . -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "auggie-daemon.fullname" . }}
+  labels:
+    {{- include "auggie-daemon.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "auggie-daemon.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- with .Values.networkPolicy.ingress }}
+  ingress:
+    {{- toYaml . | nindent 4 }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if or .Values.networkPolicy.allowDns .Values.networkPolicy.allowHttpsEgress .Values.networkPolicy.additionalEgress }}
+  egress:
+    {{- if .Values.networkPolicy.allowDns }}
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- if .Values.networkPolicy.allowHttpsEgress }}
+    - ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+    {{- with .Values.networkPolicy.additionalEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+{{- end }}

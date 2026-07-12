@@ -1,0 +1,20 @@
+{{- $validated := include "auggie-daemon.validate" . -}}
+Auggie daemon {{ .Chart.AppVersion }} has been configured as StatefulSet
+{{ include "auggie-daemon.fullname" . }} with {{ if .Values.autoscaling.enabled }}HPA-managed replicas{{ else }}{{ .Values.replicaCount }} replica(s){{ end }}.
+
+Credential source: {{ .Values.credentials.mode }}
+Workspace mode: {{ .Values.workspace.mode }}
+Bootstrap mode: {{ .Values.bootstrap.mode }}
+
+Check rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "auggie-daemon.fullname" . }}
+
+Check pods:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+{{- if eq .Values.credentials.mode "kubernetesSecret" }}
+WARNING: The existing Kubernetes Secret fallback is enabled. Prefer the GKE
+Secret Manager managed add-on and a SecretProviderClass for production.
+{{- end }}
+Never print or store the Augment session JSON in Helm values, command lines,
+logs, ConfigMaps, or rendered manifests.

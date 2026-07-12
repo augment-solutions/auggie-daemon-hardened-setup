@@ -26,6 +26,7 @@ SVC_USER="${SVC_USER:-svc-augment}"
 SVC_HOME="/var/${SVC_USER}"
 WORKSPACE="${SVC_HOME}/workspace"
 DAEMON_NAME="${DAEMON_NAME:-$(hostname -s)-bridge-01}"
+AUGGIE_VERSION="${AUGGIE_VERSION:-0.32.0}"
 PLIST="/Library/LaunchDaemons/com.augment.auggie-daemon.plist"
 LABEL="com.augment.auggie-daemon"
 LOG_OUT="${SVC_HOME}/daemon.out.log"
@@ -38,18 +39,74 @@ warn() { echo "  [WARN] $1"; WARN=$((WARN+1)); }
 info() { echo "==> $1"; }
 die()  { echo "ERROR: $1" >&2; exit 1; }
 
+validate_static_inputs() {
+  [[ "${SVC_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "SVC_USER contains unsupported characters."
+  case "${SVC_USER}" in root|nobody|daemon|bin|sys) die "Refusing reserved SVC_USER '${SVC_USER}'." ;; esac
+  [[ "${DAEMON_NAME}" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || die "DAEMON_NAME must use only letters, numbers, dot, underscore, and hyphen."
+  [[ "${AUGGIE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || die "AUGGIE_VERSION must be an exact version (for example 0.32.0)."
+}
+
+validate_pool_id() {
+  if [[ "${POOL_ID}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    POOL_ID="pool-${POOL_ID}"
+    warn "pool ID had no 'pool-' prefix; using ${POOL_ID}"
+  fi
+  [[ "${POOL_ID}" =~ ^pool-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
+    || die "Pool ID must be pool- followed by a UUID."
+}
+
+invoking_user_home() {
+  local caller="${SUDO_USER:-root}" home
+  home=$(dscl . -read "/Users/${caller}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+  [[ -n "${home}" ]] || home="${HOME:-/var/root}"
+  printf '%s' "${home}"
+}
+
+read_session_json() {
+  local target="$1" line
+  : > "${target}"
+  echo "Paste the pretty-printed session JSON (input hidden). Capture ends when valid JSON is complete:"
+  while IFS= read -r -s line; do
+    printf '%s\n' "${line}" >> "${target}"
+    if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "${target}" 2>/dev/null; then
+      echo
+      return 0
+    fi
+    [[ $(wc -c < "${target}") -le 1048576 ]] || die "Pasted credential exceeds 1 MiB."
+  done
+  die "Credential paste ended before valid JSON was complete."
+}
+
+safe_workspace_name() {
+  local name="$1"
+  [[ -n "${name}" && "${name}" != "." && "${name}" != ".." && "${name}" != "/" && "${name}" != *$'\n'* ]] \
+    || die "Workspace source has an unsafe destination name."
+}
+
+xml_escape() {
+  node -e 'process.stdout.write(process.argv[1].replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/\x27/g,"&apos;"))' "$1"
+}
+
 [[ $EUID -eq 0 ]] || die "Run with sudo: sudo $0"
+validate_static_inputs
+[[ ! -L "${SVC_HOME}" ]] || die "Refusing symlinked service home: ${SVC_HOME}"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
   info "Uninstalling..."
   launchctl bootout "system/${LABEL}" 2>/dev/null || true
   rm -f "${PLIST}"
   if id "${SVC_USER}" &>/dev/null; then
-    sysadminctl -deleteUser "${SVC_USER}" 2>/dev/null || dscl . -delete "/Users/${SVC_USER}"
+    SVC_UID=$(id -u "${SVC_USER}")
+    ACCOUNT_HOME=$(dscl . -read "/Users/${SVC_USER}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+    if [[ "${SVC_UID}" != "0" && "${ACCOUNT_HOME}" == "${SVC_HOME}" ]]; then
+      sysadminctl -deleteUser "${SVC_USER}" 2>/dev/null || dscl . -delete "/Users/${SVC_USER}"
+    else
+      warn "not deleting unexpected account ${SVC_USER} (uid=${SVC_UID}, home=${ACCOUNT_HOME})"
+    fi
   fi
   dseditgroup -o delete -q "${SVC_USER}" 2>/dev/null || true
-  read -r -p "Delete ${SVC_HOME} (workspace + credential)? [y/N] " yn
-  [[ "${yn}" == "y" ]] && rm -rf "${SVC_HOME}"
+  read -r -p "Type DELETE to remove ${SVC_HOME} (workspace + credential), or press Enter to keep it: " confirm
+  [[ "${confirm}" == "DELETE" ]] && rm -rf "${SVC_HOME}"
   echo "Uninstalled."
   exit 0
 fi
@@ -68,10 +125,7 @@ if [[ -z "${POOL_ID:-}" ]]; then
   read -r -p "Daemon pool ID (from Cosmos > Environments > your Daemon Pool): " POOL_ID
 fi
 [[ -n "${POOL_ID}" ]] || die "Pool ID is required."
-if [[ "${POOL_ID}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-  POOL_ID="pool-${POOL_ID}"
-  warn "pool ID had no 'pool-' prefix; using ${POOL_ID}"
-fi
+validate_pool_id
 
 # Max agents: Enter = keep daemon's own default (100)
 if [[ -z "${MAX_AGENTS+x}" ]]; then
@@ -79,6 +133,7 @@ if [[ -z "${MAX_AGENTS+x}" ]]; then
 fi
 if [[ -n "${MAX_AGENTS}" ]]; then
   [[ "${MAX_AGENTS}" =~ ^[0-9]+$ ]] || die "Max agents must be a number or blank."
+  (( 10#${MAX_AGENTS} > 0 )) || die "Max agents must be greater than zero."
   info "Capping at ${MAX_AGENTS} concurrent sessions (each active session can use 0.5-2 GB RAM)"
 else
   warn "using daemon default (100 slots). On laptops/small hosts this can exhaust RAM under load; consider a cap."
@@ -94,14 +149,12 @@ else
   echo "app.augmentcode.com/settings/service-accounts)."
   read -r -p "Path to session.json (leave blank to paste JSON instead): " SJ_PATH
   if [[ -n "${SJ_PATH}" ]]; then
-    SJ_PATH="${SJ_PATH/#\~/$HOME}"
+    # shellcheck disable=SC2088 # Match a literal tilde before expanding the invoking user's home.
+    case "${SJ_PATH}" in "~"|"~/"*) SJ_PATH="$(invoking_user_home)${SJ_PATH:1}" ;; esac
     [[ -f "${SJ_PATH}" ]] || die "File not found: ${SJ_PATH}"
     cp "${SJ_PATH}" "${SESSION_TMP}"
   else
-    echo "Paste the session JSON on one line (input hidden), then press Enter:"
-    read -r -s SJ_INLINE
-    printf '%s' "${SJ_INLINE}" > "${SESSION_TMP}"
-    unset SJ_INLINE
+    read_session_json "${SESSION_TMP}"
   fi
 fi
 
@@ -143,8 +196,18 @@ fi
 
 # ---------- create service account ----------
 info "Creating service account '${SVC_USER}'"
+launchctl bootout "system/${LABEL}" 2>/dev/null || true
+sleep 2
 if id "${SVC_USER}" &>/dev/null; then
-  warn "User ${SVC_USER} already exists; reusing."
+  SVC_UID=$(id -u "${SVC_USER}")
+  ACCOUNT_HOME=$(dscl . -read "/Users/${SVC_USER}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+  ACCOUNT_SHELL=$(dscl . -read "/Users/${SVC_USER}" UserShell 2>/dev/null | awk '{print $2}')
+  [[ "${SVC_UID}" != "0" ]] || die "Refusing to reuse uid 0 account ${SVC_USER}."
+  [[ "${ACCOUNT_HOME}" == "${SVC_HOME}" ]] || die "Existing ${SVC_USER} home is ${ACCOUNT_HOME}, expected ${SVC_HOME}."
+  [[ "${ACCOUNT_SHELL}" == "/usr/bin/false" || "${ACCOUNT_SHELL}" == */nologin ]] || die "Existing ${SVC_USER} has an interactive shell (${ACCOUNT_SHELL})."
+  dsmemberutil checkmembership -U "${SVC_USER}" -G admin 2>/dev/null | grep -q "is not a member" \
+    || die "Existing ${SVC_USER} is an administrator."
+  warn "verified existing locked-down account; reusing"
 else
   sysadminctl -addUser "${SVC_USER}" -shell /usr/bin/false -home "${SVC_HOME}" >/dev/null 2>&1
   dscl . create "/Users/${SVC_USER}" IsHidden 1
@@ -163,22 +226,25 @@ else
 fi
 
 info "Preparing directories"
+for protected_path in "${WORKSPACE}" "${SVC_HOME}/.augment" "${SVC_HOME}/.npm-global"; do
+  [[ ! -L "${protected_path}" ]] || die "Refusing symlinked managed path: ${protected_path}"
+done
 mkdir -p "${WORKSPACE}" "${SVC_HOME}/.augment" "${SVC_HOME}/.npm-global"
 chown -R "${SVC_USER}:${SVC_USER}" "${SVC_HOME}"
 chmod 750 "${SVC_HOME}"
 cd "${SVC_HOME}"   # neutral cwd for all sudo-spawned shells
 
 # ---------- install auggie ----------
-info "Installing @augmentcode/auggie under ${SVC_USER}'s npm prefix (may take a minute)"
-sudo -u "${SVC_USER}" -H bash -c "
-  cd '${SVC_HOME}'
-  export HOME='${SVC_HOME}'
-  npm config set prefix '${SVC_HOME}/.npm-global' --location=user
-  npm install -g @augmentcode/auggie --loglevel=error
-" || die "auggie install failed."
+info "Installing @augmentcode/auggie@${AUGGIE_VERSION} under ${SVC_USER}'s npm prefix (may take a minute)"
+chown -R "${SVC_USER}:${SVC_USER}" "${SVC_HOME}/.npm-global"
+sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" npm config set prefix "${SVC_HOME}/.npm-global" --location=user
+sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" npm install -g "@augmentcode/auggie@${AUGGIE_VERSION}" --loglevel=error \
+  || die "auggie install failed."
 AUGGIE_BIN="${SVC_HOME}/.npm-global/bin/auggie"
 [[ -x "${AUGGIE_BIN}" ]] || die "auggie binary not found at ${AUGGIE_BIN}"
-AUGGIE_VER=$(sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && HOME='${SVC_HOME}' '${AUGGIE_BIN}' --version" 2>/dev/null | head -1 || true)
+AUGGIE_VER=$(sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" "${AUGGIE_BIN}" --version 2>/dev/null | head -1 || true)
+chown -R "root:${SVC_USER}" "${SVC_HOME}/.npm-global"
+chmod -R u=rwX,g=rX,o= "${SVC_HOME}/.npm-global"
 ok "auggie ${AUGGIE_VER:-installed} at ${AUGGIE_BIN}"
 
 # ---------- materialize workspaces ----------
@@ -187,27 +253,34 @@ ok "auggie ${AUGGIE_VER:-installed} at ${AUGGIE_BIN}"
 # live where the service account can reach it and your 700 home cannot leak).
 materialize_ws() {  # $1 = source, echoes the destination path
   local src="$1" name dest
-  if [[ -d "${src/#\~/$HOME}" ]]; then
-    src="${src/#\~/$HOME}"
+  # shellcheck disable=SC2088 # Match a literal tilde before expanding the invoking user's home.
+  case "${src}" in "~"|"~/"*) src="$(invoking_user_home)${src:1}" ;; esac
+  if [[ -d "${src}" ]]; then
     name=$(basename "${src}")
     dest="${WORKSPACE}/${name}"
+    safe_workspace_name "${name}"
+    [[ ! -L "${dest}" ]] || die "Refusing symlinked workspace destination: ${dest}"
     if [[ -d "${dest}" ]]; then echo "${dest}"; return 0; fi
     echo "    copying local path ${src} -> ${dest}" >&2
     cp -R "${src}" "${dest}"
     chown -R "${SVC_USER}:${SVC_USER}" "${dest}"
     if [[ ! -d "${dest}/.git" ]]; then
       echo "    (not a git repo - initializing one so worktrees function)" >&2
-      sudo -u "${SVC_USER}" -H bash -c "
-        cd '${dest}' &&
-        git init -q && git config user.email 'svc@localhost' &&
-        git config user.name '${SVC_USER}' && git add -A && git commit -qm 'import'"
+        sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${dest}" init -q
+        sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${dest}" config user.email svc@localhost
+        sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${dest}" config user.name "${SVC_USER}"
+        sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${dest}" add -A
+        sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${dest}" commit -qm import
     fi
   else
     name=$(basename "${src}" .git)
     dest="${WORKSPACE}/${name}"
+    safe_workspace_name "${name}"
+    [[ ! -L "${dest}" ]] || die "Refusing symlinked workspace destination: ${dest}"
     if [[ -d "${dest}" ]]; then echo "${dest}"; return 0; fi
     echo "    cloning ${src} -> ${dest}" >&2
-    sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && git clone '${src}' '${dest}'" \
+    sudo -u "${SVC_USER}" -H env -u GIT_SSH -u GIT_SSH_COMMAND HOME="${SVC_HOME}" \
+      git -C "${SVC_HOME}" clone -- "${src}" "${dest}" \
       || die "git clone failed for ${src}"
   fi
   echo "${dest}"
@@ -218,11 +291,12 @@ WS_DIRS=()
 if [[ ${#WS_SOURCES[@]} -eq 0 ]]; then
   DEST="${WORKSPACE}/sandbox"
   if [[ ! -d "${DEST}/.git" ]]; then
-    sudo -u "${SVC_USER}" -H bash -c "
-      cd '${SVC_HOME}' &&
-      git init -q '${DEST}' && cd '${DEST}' &&
-      git config user.email 'svc@localhost' && git config user.name '${SVC_USER}' &&
-      echo '# sandbox' > README.md && git add . && git commit -qm init"
+    sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git init -q "${DEST}"
+    sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${DEST}" config user.email svc@localhost
+    sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${DEST}" config user.name "${SVC_USER}"
+    sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" sh -c 'printf "%s\n" "# sandbox" > "$1"' _ "${DEST}/README.md"
+    sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${DEST}" add README.md
+    sudo -u "${SVC_USER}" -H env HOME="${SVC_HOME}" git -C "${DEST}" commit -qm init
   fi
   warn "no workspace given; created empty sandbox repo (worktrees need a git repo)"
   WS_DIRS+=("${DEST}")
@@ -237,20 +311,23 @@ for ((i=1; i<${#WS_DIRS[@]}; i++)); do ok "additional workspace: ${WS_DIRS[$i]}"
 
 # ---------- credential ----------
 info "Installing Service Account credential (owner-only 0600)"
+[[ ! -L "${SVC_HOME}/.augment/session.json" ]] || die "Refusing symlinked credential destination."
 install -o "${SVC_USER}" -g "${SVC_USER}" -m 600 "${SESSION_TMP}" "${SVC_HOME}/.augment/session.json"
 
 # ---------- LaunchDaemon ----------
 info "Writing LaunchDaemon ${PLIST}"
-launchctl bootout "system/${LABEL}" 2>/dev/null || true
-sleep 2   # let any prior instance finish shutting down (avoids Bootstrap I/O error)
-
-ARGS_XML="    <string>${AUGGIE_BIN}</string>
+AUGGIE_BIN_XML=$(xml_escape "${AUGGIE_BIN}")
+POOL_ID_XML=$(xml_escape "${POOL_ID}")
+PRIMARY_WS_XML=$(xml_escape "${PRIMARY_WS}")
+DAEMON_NAME_XML=$(xml_escape "${DAEMON_NAME}")
+ARGS_XML="    <string>${AUGGIE_BIN_XML}</string>
     <string>daemon</string>
-    <string>--pool-id</string><string>${POOL_ID}</string>
-    <string>--workspace</string><string>${PRIMARY_WS}</string>"
+    <string>--pool-id</string><string>${POOL_ID_XML}</string>
+    <string>--workspace</string><string>${PRIMARY_WS_XML}</string>"
 for ((i=1; i<${#WS_DIRS[@]}; i++)); do
+  WS_XML=$(xml_escape "${WS_DIRS[$i]}")
   ARGS_XML+="
-    <string>--add-workspace</string><string>${WS_DIRS[$i]}</string>"
+    <string>--add-workspace</string><string>${WS_XML}</string>"
 done
 if [[ -n "${MAX_AGENTS}" ]]; then
   ARGS_XML+="
@@ -258,30 +335,38 @@ if [[ -n "${MAX_AGENTS}" ]]; then
 fi
 ARGS_XML+="
     <string>--allow-indexing</string>
-    <string>--name</string><string>${DAEMON_NAME}</string>"
+    <string>--name</string><string>${DAEMON_NAME_XML}</string>"
+
+SVC_USER_XML=$(xml_escape "${SVC_USER}")
+SVC_HOME_XML=$(xml_escape "${SVC_HOME}")
+LOG_OUT_XML=$(xml_escape "${LOG_OUT}")
+LOG_ERR_XML=$(xml_escape "${LOG_ERR}")
 
 cat > "${PLIST}" <<PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${LABEL}</string>
-  <key>UserName</key><string>${SVC_USER}</string>
-  <key>GroupName</key><string>${SVC_USER}</string>
-  <key>WorkingDirectory</key><string>${PRIMARY_WS}</string>
+  <key>UserName</key><string>${SVC_USER_XML}</string>
+  <key>GroupName</key><string>${SVC_USER_XML}</string>
+  <key>WorkingDirectory</key><string>${PRIMARY_WS_XML}</string>
   <key>EnvironmentVariables</key><dict>
-    <key>HOME</key><string>${SVC_HOME}</string>
-    <key>PATH</key><string>${SVC_HOME}/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>${SVC_HOME_XML}</string>
+    <key>PATH</key><string>${SVC_HOME_XML}/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
   </dict>
   <key>ProgramArguments</key><array>
 ${ARGS_XML}
   </array>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>${LOG_OUT}</string>
-  <key>StandardErrorPath</key><string>${LOG_ERR}</string>
+  <key>StandardOutPath</key><string>${LOG_OUT_XML}</string>
+  <key>StandardErrorPath</key><string>${LOG_ERR_XML}</string>
 </dict></plist>
 PLISTEOF
 chown root:wheel "${PLIST}"; chmod 644 "${PLIST}"
+plutil -lint "${PLIST}" >/dev/null || die "Generated LaunchDaemon plist failed validation."
+install -o "${SVC_USER}" -g "${SVC_USER}" -m 600 /dev/null "${LOG_OUT}"
+install -o "${SVC_USER}" -g "${SVC_USER}" -m 600 /dev/null "${LOG_ERR}"
 launchctl bootstrap system "${PLIST}" || { sleep 3; launchctl bootstrap system "${PLIST}"; }
 
 # ---------- wait for registration ----------
@@ -315,14 +400,10 @@ fi
 
 # ---------- validation suite ----------
 echo; info "VALIDATION: OS boundary"
-dsmemberutil checkmembership -U "${SVC_USER}" -G admin 2>/dev/null | grep -q "is not a member" \
-  && ok "not in admin group" || bad "IS in admin group"
-id -Gn "${SVC_USER}" | tr ' ' '\n' | grep -qx staff \
-  && bad "in 'staff' group (can read 750 home dirs)" || ok "not in 'staff' group"
-[[ "$(dscl . -read /Users/${SVC_USER} UserShell 2>/dev/null | awk '{print $2}')" == "/usr/bin/false" ]] \
-  && ok "no interactive shell" || bad "has an interactive shell"
-dscl . -read "/Users/${SVC_USER}" IsHidden 2>/dev/null | grep -q 1 \
-  && ok "hidden from login window" || warn "not hidden"
+if dsmemberutil checkmembership -U "${SVC_USER}" -G admin 2>/dev/null | grep -q "is not a member"; then ok "not in admin group"; else bad "IS in admin group"; fi
+if id -Gn "${SVC_USER}" | tr ' ' '\n' | grep -qx staff; then bad "in 'staff' group (can read 750 home dirs)"; else ok "not in 'staff' group"; fi
+if [[ "$(dscl . -read "/Users/${SVC_USER}" UserShell 2>/dev/null | awk '{print $2}')" == "/usr/bin/false" ]]; then ok "no interactive shell"; else bad "has an interactive shell"; fi
+if dscl . -read "/Users/${SVC_USER}" IsHidden 2>/dev/null | grep -q 1; then ok "hidden from login window"; else warn "not hidden"; fi
 
 HOMES_BLOCKED=1
 for h in /Users/*; do
@@ -335,18 +416,18 @@ for h in /Users/*; do
 done
 [[ ${HOMES_BLOCKED} -eq 1 ]] && ok "cannot read any other user's home directory"
 
-sudo -u "${SVC_USER}" -H bash -c "cd / && touch /usr/local/.boundary-test" 2>/dev/null \
-  && { bad "can write to /usr/local"; rm -f /usr/local/.boundary-test; } \
-  || ok "cannot write outside its tree (/usr/local denied)"
-sudo -u "${SVC_USER}" -H bash -c "cd '${SVC_HOME}' && touch '${WORKSPACE}/.boundary-ok'" 2>/dev/null \
-  && { ok "can write inside workspace"; rm -f "${WORKSPACE}/.boundary-ok"; } \
-  || bad "cannot write inside workspace"
+if sudo -u "${SVC_USER}" -H touch /usr/local/.boundary-test 2>/dev/null; then
+  bad "can write to /usr/local"; rm -f /usr/local/.boundary-test
+else ok "cannot write outside its tree (/usr/local denied)"; fi
+if sudo -u "${SVC_USER}" -H touch "${WORKSPACE}/.boundary-ok" 2>/dev/null; then
+  ok "can write inside workspace"; rm -f "${WORKSPACE}/.boundary-ok"
+else bad "cannot write inside workspace"; fi
 
 echo; info "VALIDATION: process, credential, network"
-DPID=$(pgrep -f "auggie.*daemon.*${POOL_ID}" | head -1 || true)
+DPID=$(launchctl print "system/${LABEL}" 2>/dev/null | awk '/pid =/{print $3; exit}' || true)
 if [[ -n "${DPID}" ]]; then
   PUSER=$(ps -o user= -p "${DPID}" | tr -d ' ')
-  [[ "${PUSER}" == "${SVC_USER}" ]] && ok "daemon runs as ${SVC_USER} (pid ${DPID})" || bad "daemon runs as ${PUSER}"
+  if [[ "${PUSER}" == "${SVC_USER}" ]]; then ok "daemon runs as ${SVC_USER} (pid ${DPID})"; else bad "daemon runs as ${PUSER}"; fi
   ALL_LISTEN=$(lsof -a -p "${DPID}" -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' || true)
   EXT_LISTEN=$(printf '%s\n' "${ALL_LISTEN}" | grep -vE '^(127\.0\.0\.1|\[::1\]|localhost):' | grep -v '^$' || true)
   if [[ -n "${EXT_LISTEN}" ]]; then
@@ -359,8 +440,8 @@ if [[ -n "${DPID}" ]]; then
 else
   warn "daemon process not found; skipping process/network checks"
 fi
-PERMS=$(stat -f "%Lp" "${SVC_HOME}/.augment/session.json")
-[[ "${PERMS}" == "600" ]] && ok "credential is 0600 owner-only" || bad "credential perms are ${PERMS}, expected 600"
+PERMS=$(stat -f "%Lp" "${SVC_HOME}/.augment/session.json" 2>/dev/null || true)
+if [[ "${PERMS}" == "600" ]]; then ok "credential is 0600 owner-only"; else bad "credential perms are ${PERMS:-unavailable}, expected 600"; fi
 
 echo
 echo "================================================================"
