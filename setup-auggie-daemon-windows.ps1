@@ -28,10 +28,84 @@ param(
   [int]   $MaxAgents   = -1,   # -1 = prompt; 0 = daemon default (100); N = cap
   [string[]]$ExtraWorkspaces = @(),
   [string]$DaemonName  = "$($env:COMPUTERNAME.ToLower())-bridge-01",
+  [string]$AuggieVersion = "0.32.0",
   [ValidateSet("","task","service")][string]$RunMode = "",
   [switch]$Uninstall
 )
 $ErrorActionPreference = "Stop"
+
+function Assert-SafeRoot([string]$Path) {
+  if (-not [IO.Path]::IsPathRooted($Path)) { throw "Root must be an absolute path." }
+  $full = [IO.Path]::GetFullPath($Path)
+  $volumeRoot = [IO.Path]::GetPathRoot($full)
+  if ($full.TrimEnd('\') -eq $volumeRoot.TrimEnd('\')) { throw "Root cannot be a drive root." }
+  if ($full -match '["&|<>^%!`\r\n]') { throw "Root contains characters unsafe for Windows service command handling." }
+  foreach ($forbidden in @($env:SystemRoot, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:USERPROFILE)) {
+    if ($forbidden -and $full.TrimEnd('\') -ieq ([IO.Path]::GetFullPath($forbidden)).TrimEnd('\')) {
+      throw "Root cannot replace a Windows, Program Files, or user-profile directory."
+    }
+  }
+  if (Test-Path $full) {
+    $item = Get-Item -LiteralPath $full -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing reparse-point Root: $full" }
+  }
+  return $full.TrimEnd('\')
+}
+
+function Assert-SafeServiceUser([string]$Name) {
+  if ($Name -notmatch '^[A-Za-z][A-Za-z0-9._-]{0,19}$') { throw "SvcUser contains unsupported characters or exceeds 20 characters." }
+  if ($Name -match '^(Administrator|Guest|DefaultAccount|WDAGUtilityAccount|SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$') {
+    throw "Refusing reserved SvcUser '$Name'."
+  }
+}
+
+function Get-CryptoRandomPassword([int]$Length = 28) {
+  $classes = @('0123456789', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz', '!#$%&*')
+  $all = ($classes -join '')
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  $chars = New-Object 'System.Collections.Generic.List[char]'
+  $nextIndex = {
+    param([int]$ExclusiveMax)
+    $limit = 256 - (256 % $ExclusiveMax)
+    $byte = New-Object byte[] 1
+    do { $rng.GetBytes($byte) } while ($byte[0] -ge $limit)
+    return [int]($byte[0] % $ExclusiveMax)
+  }
+  try {
+    foreach ($class in $classes) { $chars.Add($class[(& $nextIndex $class.Length)]) }
+    while ($chars.Count -lt $Length) { $chars.Add($all[(& $nextIndex $all.Length)]) }
+    for ($i = $chars.Count - 1; $i -gt 0; $i--) {
+      $j = & $nextIndex ($i + 1)
+      $tmp = $chars[$i]; $chars[$i] = $chars[$j]; $chars[$j] = $tmp
+    }
+    return -join $chars
+  } finally { $rng.Dispose() }
+}
+
+function Remove-SensitiveFile([string]$Path) {
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+  $stream = $null
+  try {
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    $zeros = New-Object byte[] 65536
+    $remaining = $stream.Length
+    while ($remaining -gt 0) {
+      $count = [int][Math]::Min($zeros.Length, $remaining)
+      $stream.Write($zeros, 0, $count); $remaining -= $count
+    }
+    $stream.Flush($true)
+  } catch {
+    Write-Warning "Could not overwrite temporary credential before removal."
+  } finally {
+    if ($stream) { $stream.Dispose() }
+    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  }
+}
+
+Assert-SafeServiceUser $SvcUser
+if ($DaemonName -notmatch '^[A-Za-z0-9._-]{1,128}$') { throw "DaemonName must use only letters, numbers, dot, underscore, and hyphen." }
+if ($AuggieVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$') { throw "AuggieVersion must be an exact version, such as 0.32.0." }
+$Root = Assert-SafeRoot $Root
 $TaskName  = "AuggieDaemon"
 $Workspace = Join-Path $Root "workspace"
 $RepoDir   = Join-Path $Workspace "repo-a"
@@ -47,18 +121,18 @@ function Info($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 # ---------- uninstall ----------
 if ($Uninstall) {
   Info "Uninstalling..."
+  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   if (Get-Service -Name $TaskName -ErrorAction SilentlyContinue) {
     Stop-Service $TaskName -Force -ErrorAction SilentlyContinue
     $winswExe = Join-Path $Root "service\$TaskName.exe"
     if (Test-Path $winswExe) { & $winswExe uninstall | Out-Null } else { sc.exe delete $TaskName | Out-Null }
   }
-  Get-Process -Name node -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "auggie" } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
-  net user $SvcUser /delete 2>$null
-  $ans = Read-Host "Delete $Root (workspace + credential)? [y/N]"
-  if ($ans -eq "y") { Remove-Item -Recurse -Force $Root -ErrorAction SilentlyContinue }
+  Remove-SensitiveFile $CredPath
+  $existingUser = Get-LocalUser -Name $SvcUser -ErrorAction SilentlyContinue
+  if ($existingUser -and $existingUser.SID.Value -notmatch '-500$') { Remove-LocalUser -Name $SvcUser }
+  $ans = Read-Host "Type DELETE to remove $Root (workspace, tools, and logs), or press Enter to keep it"
+  if ($ans -eq "DELETE") { Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction Stop }
   Write-Host "Uninstalled."; exit 0
 }
 
@@ -79,13 +153,23 @@ elseif ($nodeMajor -lt 22) { WRN "Node $nodeMajor; Node 22+ recommended." } else
 if (-not $PoolId) { $PoolId = Read-Host "Daemon pool ID (Cosmos > Environments > your Daemon Pool)" }
 if (-not $PoolId) { throw "Pool ID is required." }
 # Normalize: Cosmos pool IDs carry a 'pool-' prefix; auto-add it for bare UUIDs.
-if ($PoolId -match '^[0-9a-fA-F-]{36}$') { $PoolId = "pool-$PoolId"; WRN "pool ID had no 'pool-' prefix; using $PoolId" }
+if ($PoolId -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+  $PoolId = "pool-$PoolId"; WRN "pool ID had no 'pool-' prefix; using $PoolId"
+}
+if ($PoolId -notmatch '^pool-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+  throw "Pool ID must be pool- followed by a UUID."
+}
 
 if (-not $SessionJson) {
   Write-Host "Service Account credential (session.json from app.augmentcode.com/settings/service-accounts)."
   $SessionJson = Read-Host "Path to session.json (blank to paste JSON instead)"
 }
 $tmpCred = New-TemporaryFile
+trap {
+  if ($tmpCred) { Remove-SensitiveFile $tmpCred.FullName }
+  [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
+  exit 1
+}
 if ($SessionJson) {
   if (-not (Test-Path $SessionJson)) { throw "File not found: $SessionJson" }
   Copy-Item $SessionJson $tmpCred -Force
@@ -94,12 +178,15 @@ if ($SessionJson) {
   $buf = ""; $depth = 0; $started = $false
   do {
     $secure = Read-Host -AsSecureString
-    $line = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { $line = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
     $buf += $line + "`n"
     foreach ($ch in $line.ToCharArray()) {
       if ($ch -eq '{') { $depth++; $started = $true }
       elseif ($ch -eq '}') { $depth-- }
     }
+    if ($buf.Length -gt 1MB) { throw "Pasted credential exceeds 1 MiB." }
   } while (-not $started -or $depth -gt 0)
   Set-Content -Path $tmpCred -Value $buf -NoNewline; $buf = $null
 }
@@ -114,12 +201,14 @@ try {
   if ($problems) { throw ("Invalid session.json: " + ($problems -join "; ")) }
   OK "credential OK (tenant: $($s.tenantURL))"
 } catch { throw "Credential validation failed: $_" }
+$s = $null
 
 if (-not $RepoUrl) { $RepoUrl = Read-Host "Primary workspace (git URL to clone / existing local path to COPY / blank = sandbox)" }
 if ($MaxAgents -lt 0) {
   $ma = Read-Host "Max concurrent agent sessions [Enter = daemon default (100); 4-5 recommended on 8-16GB hosts]"
   if ($ma) { $MaxAgents = [int]$ma } else { $MaxAgents = 0; WRN "using daemon default (100 slots); consider a cap on small hosts" }
 }
+if ($MaxAgents -lt 0) { throw "MaxAgents cannot be negative after input processing." }
 
 if (-not $RunMode) {
   Write-Host ""
@@ -136,16 +225,27 @@ if (-not $RunMode) {
 }
 Info "Run mode: $RunMode (one mechanism only - the other is removed if present)"
 
+# Stop the prior instance before changing privileged files it can otherwise race.
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+Stop-Service -Name $TaskName -Force -ErrorAction SilentlyContinue
+
 # ---------- service account ----------
 Info "Creating local service account '$SvcUser'"
-$pwPlain = -join ((48..57)+(65..90)+(97..122)+(33,35,36,37,38,42) | Get-Random -Count 28 | ForEach-Object {[char]$_})
+$pwPlain = Get-CryptoRandomPassword
+$pwSecure = ConvertTo-SecureString -String $pwPlain -AsPlainText -Force
 if (Get-LocalUser -Name $SvcUser -ErrorAction SilentlyContinue) {
+  $existingUser = Get-LocalUser -Name $SvcUser
+  if ($existingUser.SID.Value -match '-500$') { throw "Refusing to repurpose the built-in administrator account." }
+  if (Get-LocalGroupMember -Group "Administrators" -Member $SvcUser -ErrorAction SilentlyContinue) {
+    throw "Existing account $SvcUser is an administrator; refusing to repurpose it."
+  }
   WRN "user exists; resetting its password for the task registration"
-  net user $SvcUser $pwPlain | Out-Null
+  Set-LocalUser -Name $SvcUser -Password $pwSecure
 } else {
-  net user $SvcUser $pwPlain /add /passwordchg:no /y | Out-Null
+  New-LocalUser -Name $SvcUser -Password $pwSecure -PasswordNeverExpires -AccountNeverExpires -Description "Auggie daemon service account" | Out-Null
   OK "created"
 }
+$pwSecure = $null
 Set-LocalUser -Name $SvcUser -PasswordNeverExpires $true
 # Ensure not in Administrators
 Remove-LocalGroupMember -Group "Administrators" -Member $SvcUser -ErrorAction SilentlyContinue
@@ -169,15 +269,24 @@ OK "granted 'Log on as a batch job' + 'Log on as a service'"
 
 # ---------- directories + ACLs ----------
 Info "Preparing $Root with a tight, non-inherited ACL"
+if ((Test-Path $Root) -and ((Get-Item -LiteralPath $Root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+  throw "Refusing reparse-point Root: $Root"
+}
+if ((Test-Path $Workspace) -and ((Get-Item -LiteralPath $Workspace -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+  throw "Refusing reparse-point workspace root: $Workspace"
+}
 New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
 icacls $Root /inheritance:r | Out-Null
 icacls $Root /grant "${SvcUser}:(OI)(CI)M" "Administrators:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
 
 # ---------- auggie: installed INSIDE C:\augment so svc-augment can execute it ----------
-Info "Installing @augmentcode/auggie into $Root\npm (readable by the service account)"
+Info "Installing @augmentcode/auggie@$AuggieVersion into $Root\npm (readable by the service account)"
 $NpmPrefix = Join-Path $Root "npm"
+if ((Test-Path $NpmPrefix) -and ((Get-Item -LiteralPath $NpmPrefix -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+  throw "Refusing reparse-point npm prefix: $NpmPrefix"
+}
 New-Item -ItemType Directory -Force -Path $NpmPrefix | Out-Null
-npm install -g --prefix $NpmPrefix @augmentcode/auggie --loglevel=error
+npm install -g --prefix $NpmPrefix "@augmentcode/auggie@$AuggieVersion" --loglevel=error
 $AuggieCmd = Join-Path $NpmPrefix "auggie.cmd"
 if (-not (Test-Path $AuggieCmd)) { throw "auggie install failed: $AuggieCmd not found" }
 $ver = (& $AuggieCmd --version 2>$null | Select-Object -First 1)
@@ -186,12 +295,20 @@ if ($ver -match "(\d+)\.(\d+)") {
   if (($vMaj -eq 0) -and ($vMin -lt 28)) { throw "auggie $ver has a daemon startup bug on Windows. Upgrade required." }
 }
 OK "auggie $ver at $AuggieCmd"
+icacls $NpmPrefix /inheritance:r | Out-Null
+icacls $NpmPrefix /grant:r "${SvcUser}:(OI)(CI)RX" "Administrators:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
 
 # repo (clone/copy as admin; the ACL above already grants the service account)
 $AddWsDirs = @()
 function Materialize-Ws([string]$src) {
+  if ($src -match '^https?://[^/@:]+:[^/@]+@') { throw "Do not embed Git credentials in a repository URL; use a credential helper or SSH key." }
+  $normalizedSource = $src.TrimEnd([char[]]@('/','\')).Replace('\','/')
+  $leaf = ($normalizedSource -split '/')[-1]
+  $name = $leaf -replace '\.git$',''
+  if ($name -notmatch '^[A-Za-z0-9._ -]+$' -or $name -in @('.','..')) { throw "Workspace destination name contains unsupported characters: $name" }
   if (Test-Path $src -PathType Container) {
-    $dest = Join-Path $Workspace (Split-Path $src -Leaf)
+    $dest = Join-Path $Workspace $name
+    if ((Test-Path $dest) -and ((Get-Item -LiteralPath $dest -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Refusing reparse-point workspace: $dest" }
     if (-not (Test-Path $dest)) {
       Write-Host "    copying local path $src -> $dest"
       Copy-Item $src $dest -Recurse
@@ -201,8 +318,9 @@ function Materialize-Ws([string]$src) {
     }
     return $dest
   } else {
-    $dest = Join-Path $Workspace ((Split-Path $src -Leaf) -replace "\.git$","")
-    if (-not (Test-Path $dest)) { git clone $src $dest }
+    $dest = Join-Path $Workspace $name
+    if ((Test-Path $dest) -and ((Get-Item -LiteralPath $dest -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Refusing reparse-point workspace: $dest" }
+    if (-not (Test-Path $dest)) { git clone -- $src $dest }
     return $dest
   }
 }
@@ -222,8 +340,13 @@ foreach ($w in $ExtraWorkspaces) { if ($w) { $AddWsDirs += (Materialize-Ws $w) }
 
 # ---------- credential ----------
 Info "Installing credential with owner-only ACL"
+if ((Test-Path $CredPath) -and ((Get-Item -LiteralPath $CredPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+  throw "Refusing reparse-point credential destination: $CredPath"
+}
+Remove-SensitiveFile $CredPath
 Copy-Item $tmpCred $CredPath -Force
-Remove-Item $tmpCred -Force
+Remove-SensitiveFile $tmpCred.FullName
+$tmpCred = $null
 icacls $CredPath /inheritance:r | Out-Null
 icacls $CredPath /grant "${SvcUser}:R" "Administrators:F" | Out-Null
 
@@ -272,6 +395,9 @@ if ($RunMode -eq "task") {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe" -OutFile $WinswExe
   }
+  $expectedWinswHash = "05B82D46AD331CC16BDC00DE5C6332C1EF818DF8CEEFCD49C726553209B3A0DA"
+  $actualWinswHash = (Get-FileHash -LiteralPath $WinswExe -Algorithm SHA256).Hash
+  if ($actualWinswHash -ne $expectedWinswHash) { throw "WinSW v2.12.0 integrity verification failed." }
   # svc-augment needs read+execute on the wrapper; nobody else beyond admins
   icacls $SvcDir /inheritance:r | Out-Null
   icacls $SvcDir /grant "${SvcUser}:(OI)(CI)RX" "Administrators:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
@@ -279,8 +405,8 @@ if ($RunMode -eq "task") {
   # Service config: NO credentials in the XML. WinSW v2 and v3 use different
   # serviceaccount schemas (a v3-style block is silently ignored by v2 and the
   # service lands on LocalSystem - caught by the validation suite in field
-  # testing). The logon account is set deterministically via sc.exe instead,
-  # so the password never touches disk at all.
+  # testing). The logon account is set through Win32_Service.Change instead,
+  # so the password never touches disk or a child-process command line.
   $xmlEsc = { param($t) $t -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;' }
   $svcXml = @"
 <service>
@@ -299,9 +425,10 @@ if ($RunMode -eq "task") {
   try {
     Set-Content -Path $WinswXml -Value $svcXml -Encoding UTF8
     & $WinswExe install | Out-Null
-    # Set the logon account via SCM directly (note: the space after obj= / password= is required)
-    $scOut = sc.exe config $TaskName obj= $UserAccount password= $pwPlain
-    if ($LASTEXITCODE -ne 0) { throw "sc.exe config failed: $scOut" }
+    # Configure SCM in-process so the password never appears in a child-process command line.
+    $serviceObject = Get-CimInstance Win32_Service -Filter "Name='$TaskName'"
+    $changeResult = Invoke-CimMethod -InputObject $serviceObject -MethodName Change -Arguments @{ StartName = $UserAccount; StartPassword = $pwPlain }
+    if ($changeResult.ReturnValue -ne 0) { throw "Win32_Service.Change failed with code $($changeResult.ReturnValue)" }
     $pwPlain = $null
     & $WinswExe start | Out-Null
     Start-Sleep 3
@@ -319,8 +446,13 @@ if ($RunMode -eq "task") {
 
 Info "Waiting up to 90s for the daemon process"
 $deadline = (Get-Date).AddSeconds(90); $proc = $null
+$rootPattern = [regex]::Escape($Root)
+$poolPattern = [regex]::Escape($PoolId)
 while ((Get-Date) -lt $deadline) {
-  $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "auggie" -and $_.CommandLine -match "daemon" } | Select-Object -First 1
+  $proc = Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -and $_.CommandLine -match $rootPattern -and
+    $_.CommandLine -match '(?i)\bdaemon\b' -and $_.CommandLine -match "--pool-id\s+`"?$poolPattern"
+  } | Select-Object -First 1
   if ($proc) { break }; Start-Sleep 3
 }
 if ($proc) { OK "daemon process running (pid $($proc.ProcessId))" } else { WRN "daemon process not detected yet - check Task Scheduler history and $LogOut" }

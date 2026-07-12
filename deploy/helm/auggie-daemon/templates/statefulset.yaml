@@ -1,0 +1,251 @@
+{{- $validated := include "auggie-daemon.validate" . -}}
+{{- $nodeSelector := deepCopy .Values.nodeSelector -}}
+{{- if and (eq .Values.platform.mode "gkeStandard") .Values.platform.gkeStandard.workloadIdentityNodeSelector.enabled -}}
+{{- $_ := set $nodeSelector "iam.gke.io/gke-metadata-server-enabled" "true" -}}
+{{- end -}}
+{{- if eq .Values.platform.mode "gkeAutopilot" -}}
+{{- $_ := unset $nodeSelector "iam.gke.io/gke-metadata-server-enabled" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "auggie-daemon.fullname" . }}
+  labels:
+    {{- include "auggie-daemon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "auggie-daemon.headlessServiceName" . }}
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "auggie-daemon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "auggie-daemon.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "auggie-daemon.configChecksum" . }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "auggie-daemon.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      enableServiceLinks: false
+      hostIPC: false
+      hostNetwork: false
+      hostPID: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with $nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or (ne .Values.bootstrap.mode "preinstalled") (eq .Values.workspace.mode "image") }}
+      initContainers:
+        {{- if eq .Values.bootstrap.mode "bootstrapImage" }}
+        - name: install-auggie-runtime
+          image: {{ include "auggie-daemon.bootstrapImage" . | quote }}
+          imagePullPolicy: {{ .Values.bootstrap.bootstrapImage.pullPolicy }}
+          command: ["/usr/local/bin/copy-runtime"]
+          args:
+            - /runtime
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.initResources | nindent 12 }}
+          volumeMounts:
+            - name: runtime
+              mountPath: /runtime
+        {{- else if eq .Values.bootstrap.mode "runtimeNpm" }}
+        - name: install-auggie-runtime
+          image: {{ include "auggie-daemon.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["npm"]
+          args:
+            - install
+            - --global
+            - --prefix
+            - /var/run/augment-runtime-target
+            - {{ printf "@augmentcode/auggie@%s" .Values.bootstrap.auggieVersion | quote }}
+            - --no-audit
+            - --no-fund
+          env:
+            - name: HOME
+              value: {{ .Values.home.mountPath | quote }}
+            - name: NPM_CONFIG_CACHE
+              value: /tmp/npm-cache
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.initResources | nindent 12 }}
+          volumeMounts:
+            - name: runtime
+              mountPath: /var/run/augment-runtime-target
+            - name: home
+              mountPath: {{ .Values.home.mountPath | quote }}
+            - name: tmp
+              mountPath: /tmp
+        {{- end }}
+        {{- if eq .Values.workspace.mode "image" }}
+        - name: seed-workspace
+          image: {{ include "auggie-daemon.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["cp"]
+          args:
+            - -R
+            - {{ printf "%s/." (.Values.workspace.image.sourcePath | trimSuffix "/") | quote }}
+            - /var/run/augment-workspace-target/
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.initResources | nindent 12 }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /var/run/augment-workspace-target
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: auggie-daemon
+          image: {{ include "auggie-daemon.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - {{ include "auggie-daemon.auggieBinary" . | quote }}
+          args:
+            - daemon
+            - --pool-id
+            - {{ .Values.daemon.poolId | quote }}
+            - --augment-session-json
+            - {{ include "auggie-daemon.sessionPath" . | quote }}
+            - --workspace
+            - {{ .Values.workspace.mountPath | quote }}
+            {{- range .Values.daemon.additionalWorkspaces }}
+            - --add-workspace
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.daemon.maxAgents }}
+            - --max-agents
+            - {{ . | quote }}
+            {{- end }}
+            - --allow-indexing
+            - --name
+            - {{ printf "%s$(POD_NAME)" .Values.daemon.namePrefix | quote }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOME
+              value: {{ .Values.home.mountPath | quote }}
+            - name: TMPDIR
+              value: /tmp
+            {{- if ne .Values.bootstrap.mode "preinstalled" }}
+            - name: PATH
+              {{- if eq .Values.bootstrap.mode "bootstrapImage" }}
+              value: {{ printf "%s/node/bin:%s/npm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" .Values.bootstrap.runtimeMountPath .Values.bootstrap.runtimeMountPath | quote }}
+              {{- else }}
+              value: {{ printf "%s/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" .Values.bootstrap.runtimeMountPath | quote }}
+              {{- end }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: credentials
+              mountPath: {{ .Values.credentials.mountPath | quote }}
+              readOnly: true
+            - name: workspace
+              mountPath: {{ .Values.workspace.mountPath | quote }}
+            - name: home
+              mountPath: {{ .Values.home.mountPath | quote }}
+            - name: tmp
+              mountPath: /tmp
+            {{- if ne .Values.bootstrap.mode "preinstalled" }}
+            - name: runtime
+              mountPath: {{ .Values.bootstrap.runtimeMountPath | quote }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: credentials
+          {{- if eq .Values.credentials.mode "secretProviderClass" }}
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ include "auggie-daemon.secretProviderClassName" . | quote }}
+          {{- else }}
+          secret:
+            secretName: {{ .Values.credentials.kubernetesSecret.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.credentials.kubernetesSecret.key | quote }}
+                path: {{ .Values.credentials.sessionFile | quote }}
+          {{- end }}
+        {{- if ne .Values.workspace.mode "persistent" }}
+        - name: workspace
+          {{- if .Values.workspace.emptyDir.sizeLimit }}
+          emptyDir:
+            sizeLimit: {{ .Values.workspace.emptyDir.sizeLimit | quote }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- if ne .Values.bootstrap.mode "preinstalled" }}
+        - name: runtime
+          emptyDir: {}
+        {{- end }}
+        - name: home
+          emptyDir:
+            sizeLimit: {{ .Values.home.sizeLimit | quote }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmp.sizeLimit | quote }}
+  {{- if eq .Values.workspace.mode "persistent" }}
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+        labels:
+          {{- include "auggie-daemon.selectorLabels" . | nindent 10 }}
+        {{- with .Values.workspace.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.workspace.persistence.accessModes | nindent 10 }}
+        {{- with .Values.workspace.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.workspace.persistence.size | quote }}
+  {{- end }}

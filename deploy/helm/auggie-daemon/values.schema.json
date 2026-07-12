@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Auggie daemon Helm values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": { "type": "string", "maxLength": 63, "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" },
+    "fullnameOverride": { "type": "string", "maxLength": 63, "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" },
+    "image": { "$ref": "#/definitions/image" },
+    "imagePullSecrets": { "type": "array", "items": { "type": "object", "required": ["name"], "properties": { "name": { "$ref": "#/definitions/dnsSubdomain" } }, "additionalProperties": false } },
+    "replicaCount": { "type": "integer", "minimum": 1 },
+    "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
+    "platform": {
+      "type": "object", "additionalProperties": false, "required": ["mode", "gkeStandard"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["generic", "gkeStandard", "gkeAutopilot"] },
+        "gkeStandard": {
+          "type": "object", "additionalProperties": false, "required": ["workloadIdentityNodeSelector"],
+          "properties": {
+            "workloadIdentityNodeSelector": {
+              "type": "object", "additionalProperties": false, "required": ["enabled"],
+              "properties": { "enabled": { "type": "boolean" } }
+            }
+          }
+        }
+      }
+    },
+    "daemon": {
+      "type": "object", "additionalProperties": false, "required": ["poolId", "namePrefix", "additionalWorkspaces"],
+      "properties": {
+        "poolId": { "type": "string", "pattern": "^pool-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$" },
+        "namePrefix": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "maxAgents": { "type": ["integer", "null"], "minimum": 1 },
+        "additionalWorkspaces": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/absolutePath" } }
+      }
+    },
+    "bootstrap": {
+      "type": "object", "additionalProperties": false, "required": ["mode", "auggieVersion", "runtimeMountPath", "bootstrapImage"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["bootstrapImage", "runtimeNpm", "preinstalled"] },
+        "auggieVersion": { "type": "string", "const": "0.32.0" },
+        "runtimeMountPath": { "$ref": "#/definitions/absolutePath" },
+        "bootstrapImage": {
+          "type": "object", "additionalProperties": false,
+          "required": ["repository", "tag", "digest", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string" }, "tag": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^$|^sha256:[A-Fa-f0-9]{64}$" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        }
+      }
+    },
+    "workspace": {
+      "type": "object", "additionalProperties": false, "required": ["mode", "mountPath", "image", "emptyDir", "persistence"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["ephemeral", "persistent", "image"] },
+        "mountPath": { "$ref": "#/definitions/absolutePath" },
+        "image": { "type": "object", "additionalProperties": false, "required": ["sourcePath"], "properties": { "sourcePath": { "type": "string", "pattern": "^$|^/[A-Za-z0-9._/-]+$" } } },
+        "emptyDir": { "type": "object", "additionalProperties": false, "required": ["sizeLimit"], "properties": { "sizeLimit": { "type": "string" } } },
+        "persistence": {
+          "type": "object", "additionalProperties": false, "required": ["storageClass", "accessModes", "size", "annotations"],
+          "properties": {
+            "storageClass": { "type": "string" },
+            "accessModes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"] } },
+            "size": { "type": "string", "minLength": 1 },
+            "annotations": { "$ref": "#/definitions/stringMap" }
+          }
+        }
+      }
+    },
+    "credentials": {
+      "type": "object", "additionalProperties": false, "required": ["mode", "mountPath", "sessionFile", "secretProviderClass", "kubernetesSecret"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["secretProviderClass", "kubernetesSecret"] },
+        "mountPath": { "$ref": "#/definitions/absolutePath" },
+        "sessionFile": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "secretProviderClass": {
+          "type": "object", "additionalProperties": false, "required": ["create", "existingName", "name", "secrets"],
+          "properties": {
+            "create": { "type": "boolean" },
+            "existingName": { "type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" },
+            "name": { "type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" },
+            "secrets": {
+              "type": "array",
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["resourceName", "path"],
+                "properties": {
+                  "resourceName": { "type": "string", "pattern": "^projects/[^/]+/(locations/[^/]+/)?secrets/[^/]+/versions/[^/]+$" },
+                  "path": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+                }
+              }
+            }
+          }
+        },
+        "kubernetesSecret": {
+          "type": "object", "additionalProperties": false, "required": ["existingSecret", "key", "acknowledgeRisk"],
+          "properties": {
+            "existingSecret": { "type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" },
+            "key": { "type": "string", "minLength": 1 },
+            "acknowledgeRisk": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object", "additionalProperties": false, "required": ["create", "name", "annotations", "labels", "automountServiceAccountToken"],
+      "properties": {
+        "create": { "type": "boolean" }, "name": { "type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" },
+        "annotations": { "$ref": "#/definitions/stringMap" }, "labels": { "$ref": "#/definitions/stringMap" },
+        "automountServiceAccountToken": { "type": "boolean" }
+      }
+    },
+    "podSecurityContext": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runAsNonRoot", "runAsUser", "runAsGroup", "fsGroup", "fsGroupChangePolicy", "seccompProfile"],
+      "properties": {
+        "runAsNonRoot": { "const": true },
+        "runAsUser": { "type": "integer", "minimum": 1 }, "runAsGroup": { "type": "integer", "minimum": 1 }, "fsGroup": { "type": "integer", "minimum": 1 },
+        "fsGroupChangePolicy": { "type": "string", "enum": ["Always", "OnRootMismatch"] },
+        "seccompProfile": { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "RuntimeDefault" } } }
+      }
+    },
+    "containerSecurityContext": {
+      "type": "object", "additionalProperties": false, "required": ["allowPrivilegeEscalation", "readOnlyRootFilesystem", "capabilities"],
+      "properties": {
+        "allowPrivilegeEscalation": { "const": false }, "readOnlyRootFilesystem": { "const": true },
+        "capabilities": {
+          "type": "object", "additionalProperties": false, "required": ["drop"],
+          "properties": { "drop": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "const": "ALL" } } }
+        }
+      }
+    },
+    "resources": { "$ref": "#/definitions/resources" },
+    "initResources": { "$ref": "#/definitions/resources" },
+    "home": { "$ref": "#/definitions/scratchVolume" },
+    "tmp": { "type": "object", "additionalProperties": false, "required": ["sizeLimit"], "properties": { "sizeLimit": { "type": "string", "minLength": 1 } } },
+    "podAnnotations": { "$ref": "#/definitions/stringMap" },
+    "podLabels": { "$ref": "#/definitions/stringMap" },
+    "nodeSelector": { "$ref": "#/definitions/stringMap" },
+    "tolerations": { "type": "array", "items": { "type": "object" } },
+    "affinity": { "type": "object" },
+    "topologySpreadConstraints": { "type": "array", "items": { "type": "object" } },
+    "priorityClassName": { "type": "string" },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
+    "updateStrategy": { "type": "object", "required": ["type"], "properties": { "type": { "type": "string", "enum": ["RollingUpdate", "OnDelete"] } }, "additionalProperties": true },
+    "autoscaling": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage", "behavior"],
+      "properties": {
+        "enabled": { "type": "boolean" }, "minReplicas": { "type": "integer", "minimum": 1 }, "maxReplicas": { "type": "integer", "minimum": 1 },
+        "targetCPUUtilizationPercentage": { "type": ["integer", "null"], "minimum": 1, "maximum": 100 },
+        "targetMemoryUtilizationPercentage": { "type": ["integer", "null"], "minimum": 1, "maximum": 100 },
+        "behavior": { "type": "object" }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "minAvailable"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "$ref": "#/definitions/intOrPercentOrNull" }, "maxUnavailable": { "$ref": "#/definitions/intOrPercentOrNull" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "allowDns", "allowHttpsEgress", "additionalEgress", "ingress"],
+      "properties": {
+        "enabled": { "type": "boolean" }, "allowDns": { "type": "boolean" }, "allowHttpsEgress": { "type": "boolean" },
+        "additionalEgress": { "type": "array", "items": { "type": "object" } }, "ingress": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "service": {
+      "type": "object", "additionalProperties": false, "required": ["annotations", "publishNotReadyAddresses"],
+      "properties": { "annotations": { "$ref": "#/definitions/stringMap" }, "publishNotReadyAddresses": { "type": "boolean" } }
+    }
+  },
+  "required": ["image", "replicaCount", "platform", "daemon", "bootstrap", "workspace", "credentials", "serviceAccount", "podSecurityContext", "containerSecurityContext", "resources", "initResources"],
+  "definitions": {
+    "absolutePath": { "type": "string", "minLength": 2, "pattern": "^/[A-Za-z0-9._/-]+$" },
+    "dnsSubdomain": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" },
+    "stringMap": { "type": "object", "additionalProperties": { "type": "string" } },
+    "image": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "tag", "digest", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string" }, "tag": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^$|^sha256:[A-Fa-f0-9]{64}$" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "resources": {
+      "type": "object", "additionalProperties": false, "required": ["requests", "limits"],
+      "properties": {
+        "requests": { "$ref": "#/definitions/resourceList" }, "limits": { "$ref": "#/definitions/resourceList" }
+      }
+    },
+    "resourceList": {
+      "type": "object", "additionalProperties": false, "required": ["cpu", "memory", "ephemeral-storage"],
+      "properties": { "cpu": { "type": "string", "minLength": 1 }, "memory": { "type": "string", "minLength": 1 }, "ephemeral-storage": { "type": "string", "minLength": 1 } }
+    },
+    "scratchVolume": {
+      "type": "object", "additionalProperties": false, "required": ["mountPath", "sizeLimit"],
+      "properties": { "mountPath": { "$ref": "#/definitions/absolutePath" }, "sizeLimit": { "type": "string", "minLength": 1 } }
+    },
+    "intOrPercentOrNull": {
+      "oneOf": [ { "type": "integer", "minimum": 0 }, { "type": "string", "pattern": "^[0-9]+%$" }, { "type": "null" } ]
+    }
+  }
+}

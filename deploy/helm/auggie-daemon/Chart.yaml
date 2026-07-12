@@ -1,0 +1,15 @@
+apiVersion: v2
+name: auggie-daemon
+description: Production Helm chart for running Auggie daemon on customer-managed OCI images
+type: application
+version: 0.1.0
+appVersion: "0.32.0"
+kubeVersion: ">=1.25.0-0"
+keywords:
+  - augment
+  - auggie
+  - daemon
+  - gke
+home: https://docs.augmentcode.com
+annotations:
+  artifacthub.io/license: Apache-2.0

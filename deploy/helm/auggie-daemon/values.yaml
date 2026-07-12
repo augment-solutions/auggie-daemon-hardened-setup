@@ -1,0 +1,151 @@
+# A private, customer-supplied Rocky Linux 8-compatible OCI image is required.
+image:
+  repository: ""
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 1
+revisionHistoryLimit: 3
+
+platform:
+  mode: generic # generic, gkeStandard, or gkeAutopilot
+  gkeStandard:
+    workloadIdentityNodeSelector:
+      enabled: false
+
+daemon:
+  poolId: ""
+  namePrefix: "auggie-"
+  maxAgents: null
+  additionalWorkspaces: []
+
+bootstrap:
+  # runtimeNpm installs the exact version into an emptyDir using image above.
+  # bootstrapImage copies a customer-built runtime; preinstalled uses image PATH.
+  mode: runtimeNpm
+  auggieVersion: "0.32.0"
+  runtimeMountPath: /opt/auggie-runtime
+  bootstrapImage:
+    repository: ""
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+
+workspace:
+  mode: ephemeral # ephemeral, persistent, or image
+  mountPath: /workspace
+  image:
+    sourcePath: ""
+  emptyDir:
+    sizeLimit: ""
+  persistence:
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 20Gi
+    annotations: {}
+
+credentials:
+  # secretProviderClass is strongly preferred. kubernetesSecret is discouraged.
+  mode: secretProviderClass
+  mountPath: /var/run/secrets/augment
+  sessionFile: augment-session.json
+  secretProviderClass:
+    create: false
+    existingName: ""
+    name: ""
+    secrets: []
+    # Example item (metadata only; never put secret content in values):
+    # - resourceName: projects/PROJECT_ID/secrets/SECRET_NAME/versions/latest
+    #   path: augment-session.json
+  kubernetesSecret:
+    existingSecret: ""
+    key: augment-session.json
+    acknowledgeRisk: false
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  labels: {}
+  automountServiceAccountToken: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+    ephemeral-storage: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+    ephemeral-storage: 4Gi
+
+initResources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+    ephemeral-storage: 1Gi
+  limits:
+    cpu: "1"
+    memory: 2Gi
+    ephemeral-storage: 4Gi
+
+home:
+  mountPath: /home/auggie
+  sizeLimit: 1Gi
+tmp:
+  sizeLimit: 1Gi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+terminationGracePeriodSeconds: 30
+
+updateStrategy:
+  type: RollingUpdate
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: null
+  behavior: {}
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: null
+
+networkPolicy:
+  enabled: false
+  allowDns: true
+  allowHttpsEgress: true
+  additionalEgress: []
+  ingress: []
+
+service:
+  annotations: {}
+  publishNotReadyAddresses: true
