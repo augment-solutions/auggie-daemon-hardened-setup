@@ -77,6 +77,13 @@ For WIF, use the chart-created KSA or set `serviceAccount.create=false` and
 provide `serviceAccount.name`. KSA annotations are supported for environments
 that map a KSA to a Google service account.
 
+If application code uses ADC directly, allow egress to the GKE metadata server
+through `networkPolicy.additionalEgress`. GKE Dataplane V2 uses
+`169.254.169.254/32` on TCP 80 and 8080; other GKE dataplanes use documented
+metadata endpoints and ports. Keep the rule scoped to the required `/32` so
+general HTTP egress remains denied. Secret Manager CSI access does not validate
+that in-pod ADC can reach the metadata server.
+
 ### Existing Kubernetes Secret (discouraged)
 
 This fallback is intentionally gated. Set `credentials.mode=kubernetesSecret`,

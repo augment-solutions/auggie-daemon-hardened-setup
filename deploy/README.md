@@ -82,8 +82,13 @@ shell parsing, Helm schema/lint/render tests for all runtime and GKE modes,
 negative security tests, optional kubeconform validation, JSON parsing, Terraform
 format checks, and cross-artifact runtime assertions.
 
-These artifacts are statically and locally rendered but have not yet been run in
-a live customer GCP project or against Priceline's exact hardened image digest.
-Before production rollout, build the bootstrap image from the approved base,
-canary one daemon in each selected platform, verify pool registration and a real
-session, test secret rotation, and then expand replicas or the MIG.
+The GKE Autopilot path completed a sanitized live canary on 2026-07-12, including
+preinstalled control registration, corrected bootstrap initialization, forced
+pod replacement, NetworkPolicy allow/deny checks, Secret Manager rotation, and a
+real pool-routed session. See `VALIDATION.md` for repeatable gates, evidence, and
+the bootstrap defects found by the live test.
+
+This qualification does not replace customer-specific testing. Before production
+rollout, build from the customer's approved image digests, canary in each selected
+platform/network, verify a routed session and rotation, then expand replicas or
+the MIG.
