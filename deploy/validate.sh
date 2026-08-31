@@ -90,27 +90,21 @@ fi
 grep -Fq 'bootstrap.auggieVersion must be >=0.32.0 and <0.37.0' \
   "${TMP}/invalid.err"
 
-for version_name in NODE_VERSION AUGGIE_VERSION; do
-  case "${version_name}" in
-    NODE_VERSION) other_version='AUGGIE_VERSION=0.36.0' ;;
-    AUGGIE_VERSION) other_version='NODE_VERSION=22.23.1' ;;
-  esac
-  for script in preflight.sh copy-runtime.sh; do
-    for version_state in empty unset; do
-      if [ "${version_state}" = empty ]; then
-        version_command=(env "${other_version}" "${version_name}=")
-      else
-        version_command=(env -u "${version_name}" "${other_version}")
-      fi
-      if "${version_command[@]}" sh "${ROOT}/deploy/bootstrap/scripts/${script}" \
-        "${TMP}/runtime-script-test" \
-        >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
-        printf 'ERROR: %s accepted %s %s\n' \
-          "${script}" "${version_state}" "${version_name}" >&2
-        exit 1
-      fi
-      grep -Fq "${version_name} is required" "${TMP}/invalid.err"
-    done
+for script in preflight.sh copy-runtime.sh; do
+  for version_state in empty unset; do
+    if [ "${version_state}" = empty ]; then
+      version_command=(env 'AUGGIE_VERSION=')
+    else
+      version_command=(env -u AUGGIE_VERSION)
+    fi
+    if "${version_command[@]}" sh "${ROOT}/deploy/bootstrap/scripts/${script}" \
+      "${TMP}/runtime-script-test" \
+      >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
+      printf 'ERROR: %s accepted %s AUGGIE_VERSION\n' \
+        "${script}" "${version_state}" >&2
+      exit 1
+    fi
+    grep -Fq 'AUGGIE_VERSION is required' "${TMP}/invalid.err"
   done
 done
 

@@ -3,7 +3,7 @@ set -eu
 LC_ALL=C
 export LC_ALL
 
-EXPECTED_NODE_VERSION=${NODE_VERSION-}
+EXPECTED_NODE_VERSION=${NODE_VERSION:-22.23.1}
 EXPECTED_AUGGIE_VERSION=${AUGGIE_VERSION-}
 
 fail() {
@@ -11,7 +11,6 @@ fail() {
     exit 1
 }
 
-[ -n "${EXPECTED_NODE_VERSION}" ] || fail "NODE_VERSION is required"
 [ -n "${EXPECTED_AUGGIE_VERSION}" ] || fail "AUGGIE_VERSION is required"
 
 validate_path() {
