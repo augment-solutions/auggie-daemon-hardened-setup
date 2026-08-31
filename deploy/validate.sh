@@ -14,8 +14,20 @@ for tool in helm shellcheck terraform python3; do
   }
 done
 
-find "${ROOT}/deploy" -type f -name '*.sh' -print0 | xargs -0 shellcheck --severity=warning
-shellcheck --severity=warning "${ROOT}/setup-auggie-daemon-linux.sh"
+helm_version=$(helm version --template '{{.Version}}')
+if [[ ! "${helm_version}" =~ ^v?([0-9]+)\.([0-9]+)\. ]]; then
+  printf 'ERROR: unable to parse Helm version: %s\n' "${helm_version}" >&2
+  exit 1
+fi
+helm_major=${BASH_REMATCH[1]}
+helm_minor=${BASH_REMATCH[2]}
+if ((helm_major < 3 || (helm_major == 3 && helm_minor < 16))); then
+  printf 'ERROR: Helm 3.16.0 or newer is required; found %s\n' "${helm_version}" >&2
+  exit 1
+fi
+
+find "${ROOT}/deploy" -type f -name '*.sh' -print0 | xargs -0 shellcheck
+shellcheck "${ROOT}/setup-auggie-daemon-linux.sh"
 for script in \
   "${ROOT}/setup-auggie-daemon-linux.sh" \
   "${ROOT}/deploy/gce/startup-direct.sh" \
@@ -78,31 +90,58 @@ fi
 grep -Fq 'bootstrap.auggieVersion must be >=0.32.0 and <0.37.0' \
   "${TMP}/invalid.err"
 
-for script in preflight.sh copy-runtime.sh; do
-  if AUGGIE_VERSION='' sh "${ROOT}/deploy/bootstrap/scripts/${script}" \
-    >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
-    printf 'ERROR: %s accepted an empty AUGGIE_VERSION\n' "${script}" >&2
-    exit 1
-  fi
-  grep -Fq 'AUGGIE_VERSION is required' "${TMP}/invalid.err"
+for version_name in NODE_VERSION AUGGIE_VERSION; do
+  case "${version_name}" in
+    NODE_VERSION) other_version='AUGGIE_VERSION=0.36.0' ;;
+    AUGGIE_VERSION) other_version='NODE_VERSION=22.23.1' ;;
+  esac
+  for script in preflight.sh copy-runtime.sh; do
+    for version_state in empty unset; do
+      if [ "${version_state}" = empty ]; then
+        version_command=(env "${other_version}" "${version_name}=")
+      else
+        version_command=(env -u "${version_name}" "${other_version}")
+      fi
+      if "${version_command[@]}" sh "${ROOT}/deploy/bootstrap/scripts/${script}" \
+        "${TMP}/runtime-script-test" \
+        >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
+        printf 'ERROR: %s accepted %s %s\n' \
+          "${script}" "${version_state}" "${version_name}" >&2
+        exit 1
+      fi
+      grep -Fq "${version_name} is required" "${TMP}/invalid.err"
+    done
+  done
 done
 
+# This fake Docker checks only optional-version argv plumbing. Functional
+# copy/preflight coverage still requires the documented container smoke suite.
 mkdir "${TMP}/fake-bin"
 cat > "${TMP}/fake-bin/docker" <<'SH'
 #!/bin/sh
-printf '%s\n' "$@" >> "${DOCKER_LOG}"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --env ]; then
+    shift
+    printf '%s\n' "$1" >> "${DOCKER_LOG}"
+  fi
+  shift
+done
 SH
 chmod +x "${TMP}/fake-bin/docker"
+: > "${TMP}/smoke-default.log"
 DOCKER_LOG="${TMP}/smoke-default.log" PATH="${TMP}/fake-bin:${PATH}" \
   "${ROOT}/deploy/bootstrap/tests/smoke.sh" example/image:0.34.0 >/dev/null
-if grep -Fxq -- '--env' "${TMP}/smoke-default.log"; then
-  printf 'ERROR: default smoke run overrode the image Auggie version\n' >&2
+if [ -s "${TMP}/smoke-default.log" ]; then
+  printf 'ERROR: default smoke run overrode an image environment value\n' >&2
   exit 1
 fi
+: > "${TMP}/smoke-override.log"
 DOCKER_LOG="${TMP}/smoke-override.log" PATH="${TMP}/fake-bin:${PATH}" \
   "${ROOT}/deploy/bootstrap/tests/smoke.sh" example/image:0.34.0 0.34.0 >/dev/null
-grep -Fxq -- '--env' "${TMP}/smoke-override.log"
-grep -Fxq 'AUGGIE_VERSION=0.34.0' "${TMP}/smoke-override.log"
+if [ "$(grep -Fxc 'AUGGIE_VERSION=0.34.0' "${TMP}/smoke-override.log")" -ne 5 ]; then
+  printf 'ERROR: smoke version override did not reach every runtime container\n' >&2
+  exit 1
+fi
 
 python3 -m json.tool "${CHART}/values.schema.json" >/dev/null
 terraform -chdir="${ROOT}/deploy/gce/terraform" fmt -check -diff

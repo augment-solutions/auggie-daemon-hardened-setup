@@ -3,7 +3,7 @@ set -eu
 LC_ALL=C
 export LC_ALL
 
-EXPECTED_NODE_VERSION=${NODE_VERSION:-22.23.1}
+EXPECTED_NODE_VERSION=${NODE_VERSION-}
 EXPECTED_AUGGIE_VERSION=${AUGGIE_VERSION-}
 
 fail() {
@@ -11,6 +11,7 @@ fail() {
     exit 1
 }
 
+[ -n "${EXPECTED_NODE_VERSION}" ] || fail "NODE_VERSION is required"
 [ -n "${EXPECTED_AUGGIE_VERSION}" ] || fail "AUGGIE_VERSION is required"
 
 validate_path() {
@@ -50,19 +51,24 @@ for required_dir in \
     "${runtime_root}/npm/lib/node_modules/@augmentcode" \
     "${runtime_root}/npm/lib/node_modules/@augmentcode/auggie"
 do
-    [ -d "${required_dir}" ] && [ ! -L "${required_dir}" ] \
-        || fail "runtime contains a missing or symlinked directory"
+    if [ ! -d "${required_dir}" ] || [ -L "${required_dir}" ]; then
+        fail "runtime contains a missing or symlinked directory"
+    fi
 done
-[ -f "${node_bin}" ] && [ ! -L "${node_bin}" ] && [ -x "${node_bin}" ] \
-    || fail "Node executable is missing or unsafe"
-[ -L "${auggie_bin}" ] && [ -f "${auggie_bin}" ] && [ -x "${auggie_bin}" ] \
-    || fail "Auggie npm bin link is missing or broken"
+if [ ! -f "${node_bin}" ] || [ -L "${node_bin}" ] || [ ! -x "${node_bin}" ]; then
+    fail "Node executable is missing or unsafe"
+fi
+if [ ! -L "${auggie_bin}" ] || [ ! -f "${auggie_bin}" ] || [ ! -x "${auggie_bin}" ]; then
+    fail "Auggie npm bin link is missing or broken"
+fi
 [ "$(readlink -- "${auggie_bin}")" = "../lib/node_modules/@augmentcode/auggie/augment.mjs" ] \
     || fail "Auggie npm bin link has an unexpected target"
-[ -f "${package_json}" ] && [ ! -L "${package_json}" ] \
-    || fail "Auggie package metadata is missing or unsafe"
-[ -f "${manifest}" ] && [ ! -L "${manifest}" ] \
-    || fail "runtime manifest is missing or unsafe"
+if [ ! -f "${package_json}" ] || [ -L "${package_json}" ]; then
+    fail "Auggie package metadata is missing or unsafe"
+fi
+if [ ! -f "${manifest}" ] || [ -L "${manifest}" ]; then
+    fail "runtime manifest is missing or unsafe"
+fi
 
 {
     IFS= read -r node_line || fail "invalid runtime manifest"

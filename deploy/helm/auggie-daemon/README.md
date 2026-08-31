@@ -26,7 +26,7 @@ Kubernetes expands `$(POD_NAME)` from the downward API without a shell.
 
 ## Prerequisites
 
-- Kubernetes 1.25+ and Helm 3.
+- Kubernetes 1.25+ and Helm 3.16.0 or newer.
 - A private Rocky Linux 8-compatible image accessible to the cluster.
 - For GKE Secret Manager: enable the Secret Manager managed add-on and grant
   the KSA principal access to the referenced secret versions.
