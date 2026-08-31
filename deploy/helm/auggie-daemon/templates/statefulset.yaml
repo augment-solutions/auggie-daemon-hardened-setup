@@ -69,7 +69,6 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or (ne .Values.bootstrap.mode "preinstalled") (eq .Values.workspace.mode "image") }}
       initContainers:
         {{- if eq .Values.bootstrap.mode "bootstrapImage" }}
         - name: install-auggie-runtime
@@ -78,6 +77,9 @@ spec:
           command: ["/usr/local/bin/copy-runtime"]
           args:
             - /runtime
+          env:
+            - name: AUGGIE_VERSION
+              value: {{ .Values.bootstrap.auggieVersion | quote }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
@@ -116,6 +118,25 @@ spec:
               mountPath: {{ .Values.home.mountPath | quote }}
             - name: tmp
               mountPath: /tmp
+        {{- else if eq .Values.bootstrap.mode "preinstalled" }}
+        - name: verify-auggie-runtime
+          image: {{ include "auggie-daemon.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/preflight-runtime"]
+          args:
+            - {{ .Values.bootstrap.runtimeMountPath | quote }}
+          env:
+            - name: AUGGIE_VERSION
+              value: {{ .Values.bootstrap.auggieVersion | quote }}
+            - name: HOME
+              value: /tmp
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.initResources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
         {{- end }}
         {{- if eq .Values.workspace.mode "image" }}
         - name: seed-workspace
@@ -134,7 +155,6 @@ spec:
             - name: workspace
               mountPath: /var/run/augment-workspace-target
         {{- end }}
-      {{- end }}
       containers:
         - name: auggie-daemon
           image: {{ include "auggie-daemon.image" . | quote }}

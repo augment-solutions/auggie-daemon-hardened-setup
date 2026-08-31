@@ -31,7 +31,7 @@ config_get SECRET_PROJECT_ID augment-secret-project-id
 config_get SESSION_SECRET_ID augment-session-secret-id
 config_get SESSION_SECRET_VERSION augment-session-secret-version latest
 config_get MAX_AGENTS augment-max-agents 4
-config_get AUGGIE_VERSION augment-auggie-version 0.32.0
+config_get AUGGIE_VERSION augment-auggie-version 0.36.0
 config_get DAEMON_NAME augment-daemon-name "$(hostname -s)-bridge-01"
 
 validate_pool_id "${POOL_ID}"

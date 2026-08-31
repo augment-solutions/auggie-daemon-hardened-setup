@@ -2,6 +2,7 @@
 
 ARG BOOTSTRAP_IMAGE
 ARG ROCKY_BASE_IMAGE
+ARG AUGGIE_VERSION=0.36.0
 
 FROM ${BOOTSTRAP_IMAGE} AS runtime
 
@@ -9,11 +10,12 @@ FROM ${ROCKY_BASE_IMAGE}
 
 ARG BOOTSTRAP_IMAGE
 ARG ROCKY_BASE_IMAGE
+ARG AUGGIE_VERSION
 
 ENV HOME=/home/auggie \
     PATH=/opt/auggie-runtime/node/bin:/opt/auggie-runtime/npm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     NODE_VERSION=22.23.1 \
-    AUGGIE_VERSION=0.32.0
+    AUGGIE_VERSION=${AUGGIE_VERSION}
 
 RUN set -eu; \
     for image in "${ROCKY_BASE_IMAGE}" "${BOOTSTRAP_IMAGE}"; do \
@@ -45,7 +47,7 @@ RUN /usr/local/bin/preflight-runtime /opt/auggie-runtime
 
 LABEL org.opencontainers.image.title="Preinstalled Auggie runtime" \
       org.opencontainers.image.description="Pinned Rocky 8, Node, and Auggie control runtime" \
-      org.opencontainers.image.version="node-22.23.1-auggie-0.32.0"
+      org.opencontainers.image.version="node-22.23.1-auggie-${AUGGIE_VERSION}"
 
 ENTRYPOINT ["auggie"]
 CMD ["--version"]

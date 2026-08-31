@@ -22,10 +22,11 @@ daemon:
   additionalWorkspaces: []
 
 bootstrap:
-  # runtimeNpm installs the exact version into an emptyDir using image above.
+  # runtimeNpm installs the exact supported version into an emptyDir using image above.
   # bootstrapImage copies a customer-built runtime; preinstalled uses image PATH.
+  # Supported versions are >=0.32.0 and <0.37.0.
   mode: runtimeNpm
-  auggieVersion: "0.32.0"
+  auggieVersion: "0.36.0"
   runtimeMountPath: /opt/auggie-runtime
   bootstrapImage:
     repository: ""

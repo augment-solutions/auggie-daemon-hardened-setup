@@ -16,10 +16,14 @@ done
 
 find "${ROOT}/deploy" -type f -name '*.sh' -print0 | xargs -0 shellcheck
 shellcheck "${ROOT}/setup-auggie-daemon-linux.sh"
-bash -n "${ROOT}/setup-auggie-daemon-linux.sh" \
+for script in \
+  "${ROOT}/setup-auggie-daemon-linux.sh" \
   "${ROOT}/deploy/gce/startup-direct.sh" \
   "${ROOT}/deploy/gce/startup-container.sh" \
   "${ROOT}/deploy/gce/lib/gce-common.sh"
+do
+  bash -n "${script}"
+done
 for script in "${ROOT}"/deploy/bootstrap/scripts/*.sh; do sh -n "${script}"; done
 
 render() {
@@ -36,14 +40,34 @@ render() {
 render gke-standard -f "${CHART}/values-gke-standard.yaml"
 render gke-autopilot -f "${CHART}/values-gke-autopilot.yaml"
 render hardened -f "${CHART}/values-gke-standard.yaml" -f "${CHART}/values-hardened.yaml"
-render runtime-npm --set bootstrap.mode=runtimeNpm
+render runtime-npm-0-32 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.32.0
+render runtime-npm-0-33 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.33.7
+render runtime-npm-0-34 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.34.0
+render runtime-npm-0-35 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.35.4
+render runtime-npm-0-36 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.36.0
 render preinstalled --set bootstrap.mode=preinstalled
+
+grep -Fq 'name: AUGGIE_VERSION' "${TMP}/gke-standard.yaml"
+grep -Fq 'name: verify-auggie-runtime' "${TMP}/preinstalled.yaml"
+grep -Fq '/usr/local/bin/preflight-runtime' "${TMP}/preinstalled.yaml"
+grep -Fq 'value: "0.36.0"' "${TMP}/preinstalled.yaml"
 
 if helm template invalid "${CHART}" -f "${EXAMPLE}" --set image.tag=latest \
   >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
   printf 'ERROR: mutable latest image was accepted\n' >&2; exit 1
 fi
 grep -q 'image.tag=latest is not allowed' "${TMP}/invalid.err"
+
+for unsupported_version in 0.31.99 0.37.0; do
+  if helm template invalid "${CHART}" -f "${EXAMPLE}" \
+    --set "bootstrap.auggieVersion=${unsupported_version}" \
+    >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
+    printf 'ERROR: unsupported Auggie version %s was accepted\n' \
+      "${unsupported_version}" >&2
+    exit 1
+  fi
+  grep -q 'auggieVersion' "${TMP}/invalid.err"
+done
 
 python3 -m json.tool "${CHART}/values.schema.json" >/dev/null
 terraform -chdir="${ROOT}/deploy/gce/terraform" fmt -check -diff

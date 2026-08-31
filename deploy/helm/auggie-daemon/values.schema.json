@@ -38,7 +38,11 @@
       "type": "object", "additionalProperties": false, "required": ["mode", "auggieVersion", "runtimeMountPath", "bootstrapImage"],
       "properties": {
         "mode": { "type": "string", "enum": ["bootstrapImage", "runtimeNpm", "preinstalled"] },
-        "auggieVersion": { "type": "string", "const": "0.32.0" },
+        "auggieVersion": {
+          "type": "string",
+          "description": "Exact Auggie CLI version in the supported >=0.32.0 <0.37.0 range",
+          "pattern": "^0\\.(32|33|34|35|36)\\.(0|[1-9][0-9]*)$"
+        },
         "runtimeMountPath": { "$ref": "#/definitions/absolutePath" },
         "bootstrapImage": {
           "type": "object", "additionalProperties": false,

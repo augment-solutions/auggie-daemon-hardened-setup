@@ -92,8 +92,8 @@ auggie
 {{- if not (has .Values.bootstrap.mode (list "bootstrapImage" "runtimeNpm" "preinstalled")) -}}
 {{- fail "bootstrap.mode must be bootstrapImage, runtimeNpm, or preinstalled" -}}
 {{- end -}}
-{{- if ne .Values.bootstrap.auggieVersion "0.32.0" -}}
-{{- fail "bootstrap.auggieVersion must be exactly 0.32.0 for this chart release" -}}
+{{- if not (semverCompare ">=0.32.0 <0.37.0" .Values.bootstrap.auggieVersion) -}}
+{{- fail "bootstrap.auggieVersion must be >=0.32.0 and <0.37.0" -}}
 {{- end -}}
 {{- if eq .Values.bootstrap.mode "bootstrapImage" -}}
 {{- include "auggie-daemon.bootstrapImage" . -}}
@@ -119,7 +119,7 @@ auggie
 {{- if or (eq .Values.workspace.mountPath "/tmp") (eq .Values.credentials.mountPath "/tmp") (eq .Values.home.mountPath "/tmp") -}}
 {{- fail "workspace.mountPath, credentials.mountPath, and home.mountPath must not be /tmp" -}}
 {{- end -}}
-{{- if and (ne .Values.bootstrap.mode "preinstalled") (or (eq .Values.bootstrap.runtimeMountPath .Values.workspace.mountPath) (eq .Values.bootstrap.runtimeMountPath .Values.credentials.mountPath) (eq .Values.bootstrap.runtimeMountPath .Values.home.mountPath) (eq .Values.bootstrap.runtimeMountPath "/tmp")) -}}
+{{- if or (eq .Values.bootstrap.runtimeMountPath .Values.workspace.mountPath) (eq .Values.bootstrap.runtimeMountPath .Values.credentials.mountPath) (eq .Values.bootstrap.runtimeMountPath .Values.home.mountPath) (eq .Values.bootstrap.runtimeMountPath "/tmp") -}}
 {{- fail "bootstrap.runtimeMountPath must not overlap another explicit mount path" -}}
 {{- end -}}
 {{- if hasKey .Values.podAnnotations "checksum/config" -}}

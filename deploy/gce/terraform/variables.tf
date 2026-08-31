@@ -111,7 +111,7 @@ variable "pool_id" {
 variable "auggie_version" {
   description = "Exact Auggie CLI version for direct mode."
   type        = string
-  default     = "0.32.0"
+  default     = "0.36.0"
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+([-.][0-9A-Za-z.-]+)?$", var.auggie_version))
     error_message = "auggie_version must be an exact version."

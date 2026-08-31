@@ -26,7 +26,7 @@ SVC_USER="${SVC_USER:-svc-augment}"
 SVC_HOME="/var/${SVC_USER}"
 WORKSPACE="${SVC_HOME}/workspace"
 DAEMON_NAME="${DAEMON_NAME:-$(hostname -s)-bridge-01}"
-AUGGIE_VERSION="${AUGGIE_VERSION:-0.32.0}"
+AUGGIE_VERSION="${AUGGIE_VERSION:-0.36.0}"
 PLIST="/Library/LaunchDaemons/com.augment.auggie-daemon.plist"
 LABEL="com.augment.auggie-daemon"
 LOG_OUT="${SVC_HOME}/daemon.out.log"
@@ -43,7 +43,7 @@ validate_static_inputs() {
   [[ "${SVC_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "SVC_USER contains unsupported characters."
   case "${SVC_USER}" in root|nobody|daemon|bin|sys) die "Refusing reserved SVC_USER '${SVC_USER}'." ;; esac
   [[ "${DAEMON_NAME}" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || die "DAEMON_NAME must use only letters, numbers, dot, underscore, and hyphen."
-  [[ "${AUGGIE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || die "AUGGIE_VERSION must be an exact version (for example 0.32.0)."
+  [[ "${AUGGIE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || die "AUGGIE_VERSION must be an exact version (for example 0.36.0)."
 }
 
 validate_pool_id() {
