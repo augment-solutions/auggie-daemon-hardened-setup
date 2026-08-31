@@ -22,7 +22,9 @@ JSON validation, Terraform formatting, and cross-artifact assertions.
 
 Build the bootstrap image from `deploy/bootstrap` with digest-pinned Rocky Linux
 and verified Node checksums. Run `deploy/bootstrap/tests/smoke.sh IMAGE` in a
-Linux Docker environment before publishing. The suite covers:
+Linux Docker environment before publishing; this uses the version baked into
+the image. Optionally pass an expected version as the second argument. The suite
+covers:
 
 - Fresh copy and repeated idempotent copy.
 - Final runtime preflight.
@@ -100,9 +102,10 @@ daemon registration alone is insufficient.
 
 ## Auggie 0.36.0 compatibility validation: 2026-08-31
 
-The chart passed Helm 3.21.4 lint and render checks with Auggie `0.32.0`,
-`0.33.7`, `0.34.0`, `0.35.4`, `0.36.0`, and `0.36.12`; it rejected `0.31.99`
-and `0.37.0`. A clean npm-prefix install of `@augmentcode/auggie@0.36.0` passed
+The chart passed Helm 3.16.4 lint and render checks with the published Auggie
+releases `0.32.0`, `0.33.0`, `0.34.0`, `0.35.0`, and `0.36.0`; it rejected
+`0.31.99` and `0.37.0`. A clean npm-prefix install of
+`@augmentcode/auggie@0.36.0` passed
 its package-version assertion and `auggie --version` smoke test. Image-mode
 renders pass the configured version into preflight, which accepted `0.36.0` and
 rejected a mismatched version. This was local compatibility validation, not a

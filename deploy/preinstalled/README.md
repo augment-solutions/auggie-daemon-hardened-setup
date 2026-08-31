@@ -18,6 +18,9 @@ tenant value belongs in the image, build arguments, or image labels.
 The image runs as UID/GID `1000`, places `auggie` on `PATH`, verifies the copied
 runtime during the build, and is compatible with the chart's read-only root,
 writable home/tmp/workspace mounts, and dropped-capability security context.
+The supplied image stores its runtime at `/opt/auggie-runtime`; keep the chart's
+`bootstrap.runtimeMountPath` at that default. A custom image using another path
+must place the runtime there, update `PATH`, and set the chart value to match.
 
 Use `preinstalled` as a deliberate packaging choice or diagnostic control. A
 successful control does not qualify `bootstrapImage`; validate both modes when

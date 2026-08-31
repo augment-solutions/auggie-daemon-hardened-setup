@@ -4,12 +4,14 @@ LC_ALL=C
 export LC_ALL
 
 EXPECTED_NODE_VERSION=${NODE_VERSION:-22.23.1}
-EXPECTED_AUGGIE_VERSION=${AUGGIE_VERSION:-0.36.0}
+EXPECTED_AUGGIE_VERSION=${AUGGIE_VERSION-}
 
 fail() {
     printf 'preflight: %s\n' "$*" >&2
     exit 1
 }
+
+[ -n "${EXPECTED_AUGGIE_VERSION}" ] || fail "AUGGIE_VERSION is required"
 
 validate_path() {
     candidate=$1

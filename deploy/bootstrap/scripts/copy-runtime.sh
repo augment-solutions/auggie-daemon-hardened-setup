@@ -5,7 +5,8 @@ export LC_ALL
 umask 022
 
 SOURCE_ROOT=/opt/auggie-runtime
-EXPECTED_MARKER="node=${NODE_VERSION:-22.23.1};auggie=${AUGGIE_VERSION:-0.36.0}"
+EXPECTED_NODE_VERSION=${NODE_VERSION:-22.23.1}
+EXPECTED_AUGGIE_VERSION=${AUGGIE_VERSION-}
 lock=
 copy_started=
 
@@ -13,6 +14,9 @@ fail() {
     printf 'copy-runtime: %s\n' "$*" >&2
     exit 1
 }
+
+[ -n "${EXPECTED_AUGGIE_VERSION}" ] || fail "AUGGIE_VERSION is required"
+EXPECTED_MARKER="node=${EXPECTED_NODE_VERSION};auggie=${EXPECTED_AUGGIE_VERSION}"
 
 cleanup() {
     if [ -n "${copy_started}" ]; then

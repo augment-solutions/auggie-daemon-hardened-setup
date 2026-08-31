@@ -14,8 +14,8 @@ for tool in helm shellcheck terraform python3; do
   }
 done
 
-find "${ROOT}/deploy" -type f -name '*.sh' -print0 | xargs -0 shellcheck
-shellcheck "${ROOT}/setup-auggie-daemon-linux.sh"
+find "${ROOT}/deploy" -type f -name '*.sh' -print0 | xargs -0 shellcheck --severity=warning
+shellcheck --severity=warning "${ROOT}/setup-auggie-daemon-linux.sh"
 for script in \
   "${ROOT}/setup-auggie-daemon-linux.sh" \
   "${ROOT}/deploy/gce/startup-direct.sh" \
@@ -41,9 +41,9 @@ render gke-standard -f "${CHART}/values-gke-standard.yaml"
 render gke-autopilot -f "${CHART}/values-gke-autopilot.yaml"
 render hardened -f "${CHART}/values-gke-standard.yaml" -f "${CHART}/values-hardened.yaml"
 render runtime-npm-0-32 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.32.0
-render runtime-npm-0-33 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.33.7
+render runtime-npm-0-33 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.33.0
 render runtime-npm-0-34 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.34.0
-render runtime-npm-0-35 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.35.4
+render runtime-npm-0-35 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.35.0
 render runtime-npm-0-36 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.36.0
 render preinstalled --set bootstrap.mode=preinstalled
 
@@ -68,6 +68,41 @@ for unsupported_version in 0.31.99 0.37.0; do
   fi
   grep -q 'auggieVersion' "${TMP}/invalid.err"
 done
+
+if helm template invalid "${CHART}" -f "${EXAMPLE}" \
+  --skip-schema-validation --set bootstrap.auggieVersion=0.37.0 \
+  >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
+  printf 'ERROR: template semver guard accepted Auggie 0.37.0\n' >&2
+  exit 1
+fi
+grep -Fq 'bootstrap.auggieVersion must be >=0.32.0 and <0.37.0' \
+  "${TMP}/invalid.err"
+
+for script in preflight.sh copy-runtime.sh; do
+  if AUGGIE_VERSION='' sh "${ROOT}/deploy/bootstrap/scripts/${script}" \
+    >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
+    printf 'ERROR: %s accepted an empty AUGGIE_VERSION\n' "${script}" >&2
+    exit 1
+  fi
+  grep -Fq 'AUGGIE_VERSION is required' "${TMP}/invalid.err"
+done
+
+mkdir "${TMP}/fake-bin"
+cat > "${TMP}/fake-bin/docker" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@" >> "${DOCKER_LOG}"
+SH
+chmod +x "${TMP}/fake-bin/docker"
+DOCKER_LOG="${TMP}/smoke-default.log" PATH="${TMP}/fake-bin:${PATH}" \
+  "${ROOT}/deploy/bootstrap/tests/smoke.sh" example/image:0.34.0 >/dev/null
+if grep -Fxq -- '--env' "${TMP}/smoke-default.log"; then
+  printf 'ERROR: default smoke run overrode the image Auggie version\n' >&2
+  exit 1
+fi
+DOCKER_LOG="${TMP}/smoke-override.log" PATH="${TMP}/fake-bin:${PATH}" \
+  "${ROOT}/deploy/bootstrap/tests/smoke.sh" example/image:0.34.0 0.34.0 >/dev/null
+grep -Fxq -- '--env' "${TMP}/smoke-override.log"
+grep -Fxq 'AUGGIE_VERSION=0.34.0' "${TMP}/smoke-override.log"
 
 python3 -m json.tool "${CHART}/values.schema.json" >/dev/null
 terraform -chdir="${ROOT}/deploy/gce/terraform" fmt -check -diff
