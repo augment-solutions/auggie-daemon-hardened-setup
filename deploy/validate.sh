@@ -43,6 +43,8 @@ render hardened -f "${CHART}/values-gke-standard.yaml" -f "${CHART}/values-harde
 render runtime-npm-0-32 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.32.0
 render runtime-npm-0-33 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.33.7
 render runtime-npm-0-34 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.34.0
+render runtime-npm-0-35 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.35.4
+render runtime-npm-0-36 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.36.0
 render preinstalled --set bootstrap.mode=preinstalled
 
 if helm template invalid "${CHART}" -f "${EXAMPLE}" --set image.tag=latest \
@@ -51,7 +53,7 @@ if helm template invalid "${CHART}" -f "${EXAMPLE}" --set image.tag=latest \
 fi
 grep -q 'image.tag=latest is not allowed' "${TMP}/invalid.err"
 
-for unsupported_version in 0.31.99 0.35.0; do
+for unsupported_version in 0.31.99 0.37.0; do
   if helm template invalid "${CHART}" -f "${EXAMPLE}" \
     --set "bootstrap.auggieVersion=${unsupported_version}" \
     >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then

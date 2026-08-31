@@ -3,7 +3,7 @@ name: auggie-daemon
 description: Production Helm chart for running Auggie daemon on customer-managed OCI images
 type: application
 version: 0.2.0
-appVersion: "0.34.0"
+appVersion: "0.36.0"
 kubeVersion: ">=1.25.0-0"
 keywords:
   - augment

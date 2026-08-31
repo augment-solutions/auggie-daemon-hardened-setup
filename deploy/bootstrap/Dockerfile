@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 ARG ROCKY_BASE_IMAGE
-ARG AUGGIE_VERSION=0.34.0
+ARG AUGGIE_VERSION=0.36.0
 
 FROM ${ROCKY_BASE_IMAGE} AS builder
 

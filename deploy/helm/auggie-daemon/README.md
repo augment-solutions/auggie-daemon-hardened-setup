@@ -1,7 +1,7 @@
 # Auggie daemon Helm chart
 
-Production Helm v3 chart for Auggie daemon versions `>=0.32.0 <0.35.0`,
-defaulting to `0.34.0`. It runs the daemon in a private, customer-supplied Rocky
+Production Helm v3 chart for Auggie daemon versions `>=0.32.0 <0.37.0`,
+defaulting to `0.36.0`. It runs the daemon in a private, customer-supplied Rocky
 Linux 8-compatible OCI image. The chart does not publish, select, or assume
 access to a hosted workload or bootstrap image.
 
@@ -100,7 +100,7 @@ The chart never creates the Secret and never accepts its content in values.
 | `preinstalled` | Runs `auggie` from the workload image `PATH` | Workload image already contains the configured Auggie version |
 
 Set `bootstrap.auggieVersion` to an exact version in the supported
-`>=0.32.0 <0.35.0` range. In `bootstrapImage` and `preinstalled` modes, it must
+`>=0.32.0 <0.37.0` range. In `bootstrapImage` and `preinstalled` modes, it must
 match the version in the supplied image. `bootstrapImage.repository` is
 mandatory in that mode. Build and scan this image inside the customer supply
 chain; there is no chart default.

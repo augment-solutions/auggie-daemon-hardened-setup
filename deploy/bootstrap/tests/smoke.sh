@@ -4,7 +4,7 @@
 set -eu
 
 IMAGE=${1:?usage: smoke.sh IMAGE [AUGGIE_VERSION]}
-AUGGIE_VERSION=${2:-0.34.0}
+AUGGIE_VERSION=${2:-0.36.0}
 case_number=0
 volumes=
 

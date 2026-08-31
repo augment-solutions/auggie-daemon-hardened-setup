@@ -20,7 +20,7 @@ SVC_HOME="/srv/augment"
 WORKSPACE="${WORKSPACE:-${SVC_HOME}/workspace}"
 # MAX_AGENTS: blank = daemon default (100); set a number to cap
 DAEMON_NAME="${DAEMON_NAME:-$(hostname -s)-bridge-01}"
-AUGGIE_VERSION="${AUGGIE_VERSION:-0.34.0}"
+AUGGIE_VERSION="${AUGGIE_VERSION:-0.36.0}"
 HARDENING="${HARDENING:-strict}"   # strict | full | off
 UNIT="/etc/systemd/system/auggie-daemon.service"
 SVCNAME="auggie-daemon"
@@ -36,7 +36,7 @@ validate_static_inputs() {
   [[ "${SVC_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "SVC_USER contains unsupported characters."
   case "${SVC_USER}" in root|nobody|daemon|bin|sys|sync|shutdown|halt) die "Refusing reserved SVC_USER '${SVC_USER}'." ;; esac
   [[ "${DAEMON_NAME}" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || die "DAEMON_NAME must use only letters, numbers, dot, underscore, and hyphen."
-  [[ "${AUGGIE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || die "AUGGIE_VERSION must be an exact version (for example 0.34.0)."
+  [[ "${AUGGIE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || die "AUGGIE_VERSION must be an exact version (for example 0.36.0)."
   case "${WORKSPACE}" in
     "${SVC_HOME}"/*) ;;
     *) die "WORKSPACE must remain below ${SVC_HOME}." ;;

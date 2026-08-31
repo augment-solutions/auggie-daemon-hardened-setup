@@ -3,14 +3,14 @@
 This build produces a Rocky Linux 8-compatible bootstrap image containing:
 
 - Node.js `22.23.1` from the official Linux binary distribution.
-- `@augmentcode/auggie@0.34.0` by default in an isolated npm prefix.
+- `@augmentcode/auggie@0.36.0` by default in an isolated npm prefix.
 - A non-root entrypoint that copies the immutable runtime into a shared volume.
 
 The target customer container does not need Node or npm preinstalled. It still needs the normal Rocky 8 runtime libraries, CA certificates, and any external tools Auggie uses for the workload (notably `git`). No credentials, Augment session, npm token, or registry credential belongs in this image or its build arguments.
 
 ## Supply-chain inputs
 
-Build from this directory. `ROCKY_BASE_IMAGE`, `NODE_SHA256_AMD64`, and `NODE_SHA256_ARM64` are mandatory. `AUGGIE_VERSION` defaults to `0.34.0` and can select another exact version at build time. Both Node checksums are required even for a single-platform build so the same invocation can safely become a multi-platform build.
+Build from this directory. `ROCKY_BASE_IMAGE`, `NODE_SHA256_AMD64`, and `NODE_SHA256_ARM64` are mandatory. `AUGGIE_VERSION` defaults to `0.36.0` and can select another exact version at build time. Both Node checksums are required even for a single-platform build so the same invocation can safely become a multi-platform build.
 
 Resolve and review the current Rocky 8 minimal multi-platform manifest, then pin the approved index digest. The value below is deliberately a placeholder; do not replace it with an invented digest.
 
@@ -43,7 +43,7 @@ docker buildx build \
   --build-arg "ROCKY_BASE_IMAGE=${ROCKY_BASE_IMAGE}" \
   --build-arg "NODE_SHA256_AMD64=${NODE_SHA256_AMD64}" \
   --build-arg "NODE_SHA256_ARM64=${NODE_SHA256_ARM64}" \
-  --tag auggie-bootstrap:node-22.23.1-auggie-0.34.0 \
+  --tag auggie-bootstrap:node-22.23.1-auggie-0.36.0 \
   --load .
 ```
 
@@ -57,7 +57,7 @@ Create a Docker-format Artifact Registry repository and configure Docker authent
 export PROJECT_ID='<customer-project-id>'
 export LOCATION='<artifact-registry-location>'
 export REPOSITORY='<docker-repository>'
-export IMAGE="${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/auggie-bootstrap:node-22.23.1-auggie-0.34.0"
+export IMAGE="${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/auggie-bootstrap:node-22.23.1-auggie-0.36.0"
 
 gcloud services enable artifactregistry.googleapis.com --project "${PROJECT_ID}"
 gcloud artifacts repositories create "${REPOSITORY}" \
@@ -140,7 +140,7 @@ writable to the runtime group without being owned or chmod-capable by UID 1000.
 The following Linux Docker test exercises the default non-root user, copy, preflight, PATH resolution, and CLI startup using a UID/GID-owned tmpfs:
 
 ```sh
-IMAGE='auggie-bootstrap:node-22.23.1-auggie-0.34.0'
+IMAGE='auggie-bootstrap:node-22.23.1-auggie-0.36.0'
 docker run --rm \
   --tmpfs /runtime:rw,uid=65532,gid=65532,mode=0755 \
   --entrypoint /bin/sh "${IMAGE}" -c \

@@ -61,7 +61,7 @@ chmod +x setup-auggie-daemon-linux.sh
 sudo ./setup-auggie-daemon-linux.sh
 # hardening levels: HARDENING=strict (default) | full | off
 sudo POOL_ID=pool-xxxx SESSION_JSON_PATH=/tmp/session.json HARDENING=strict \
-  WORKSPACE_SRC=git@github.com:org/repo.git MAX_AGENTS=4 AUGGIE_VERSION=0.34.0 \
+  WORKSPACE_SRC=git@github.com:org/repo.git MAX_AGENTS=4 AUGGIE_VERSION=0.36.0 \
   ./setup-auggie-daemon-linux.sh
 ```
 WSL2 note: enable systemd first (`/etc/wsl.conf` → `[boot]\nsystemd=true`, then `wsl --shutdown`).
@@ -83,7 +83,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 1. Preflight: Node 22+ (20 minimum) and git.
 2. Prompts for pool ID, credential (path or hidden multi-line paste), max agents (Enter = daemon default), one or more workspaces (git URL / local path / sandbox), and on Windows the run mode (Scheduled Task or Windows Service). All overridable via env vars/parameters for unattended installs.
 3. Creates the locked-down account: hidden non-admin user with a dedicated primary group (macOS), `--system` account with `nologin` and home outside `/home` (Linux), non-admin local user with batch + service logon rights (Windows).
-4. Installs a pinned Auggie version (default `0.34.0`, overridable with `AUGGIE_VERSION` / `-AuggieVersion`) where the service account can execute but not modify it: under a root-owned npm prefix (macOS/Linux) or inside the ACL'd `C:\augment\npm` tree (Windows; Windows enforces auggie >= 0.28.0). Clones/copies your workspaces or creates a git sandbox so worktrees function.
+4. Installs a pinned Auggie version (default `0.36.0`, overridable with `AUGGIE_VERSION` / `-AuggieVersion`) where the service account can execute but not modify it: under a root-owned npm prefix (macOS/Linux) or inside the ACL'd `C:\augment\npm` tree (Windows; Windows enforces auggie >= 0.28.0). Clones/copies your workspaces or creates a git sandbox so worktrees function.
 5. Installs the credential at the service account's `~/.augment/session.json` (macOS/Linux) or via `--augment-session-json` (Windows), locked to owner-only.
 6. Registers the always-on wrapper (LaunchDaemon / systemd / Scheduled Task or WinSW service) and waits for real pool **registration** in the logs (macOS/Linux) or the daemon process running as the service account (Windows) - a mere websocket handshake is not treated as success, and known Cosmos rejections are diagnosed in plain English.
 7. Runs the validation suite and prints PASS/FAIL:
@@ -106,7 +106,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 - `MAX_AGENTS` (default: the daemon's own 100 slots when left blank): each concurrent session can use 0.5 to 2 GB RAM, so set 4-5 on an 8-16 GB host and archive completed sessions in Cosmos to reclaim memory. Leave blank only on hosts sized for it.
 - Linux `HARDENING=strict` makes the whole filesystem read-only to agents outside `/srv/augment`. If a workflow legitimately needs other paths, add `ReadWritePaths=` lines to the unit or use `HARDENING=full`.
 - Never point `--workspace` at the account's home directory itself; indexing is blocked there and pool sessions will fail to start.
-- The installer pins Auggie to `0.34.0` by default to avoid silently installing a different release. Upgrade explicitly by rerunning the installer with `AUGGIE_VERSION=x.y.z` (macOS/Linux) or `-AuggieVersion x.y.z` (Windows), then re-run validation.
+- The installer pins Auggie to `0.36.0` by default to avoid silently installing a different release. Upgrade explicitly by rerunning the installer with `AUGGIE_VERSION=x.y.z` (macOS/Linux) or `-AuggieVersion x.y.z` (Windows), then re-run validation.
 
 ## Validated environments and support status
 

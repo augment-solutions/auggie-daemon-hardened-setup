@@ -5,7 +5,7 @@ export LC_ALL
 umask 022
 
 SOURCE_ROOT=/opt/auggie-runtime
-EXPECTED_MARKER="node=${NODE_VERSION:-22.23.1};auggie=${AUGGIE_VERSION:-0.34.0}"
+EXPECTED_MARKER="node=${NODE_VERSION:-22.23.1};auggie=${AUGGIE_VERSION:-0.36.0}"
 lock=
 copy_started=
 

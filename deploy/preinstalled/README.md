@@ -9,7 +9,7 @@ Both image build arguments are mandatory digest-pinned references:
 - `ROCKY_BASE_IMAGE`: approved Rocky Linux 8 minimal image.
 - `BOOTSTRAP_IMAGE`: customer-built image from `deploy/bootstrap`.
 
-`AUGGIE_VERSION` defaults to `0.34.0` and must match the bootstrap image.
+`AUGGIE_VERSION` defaults to `0.36.0` and must match the bootstrap image.
 
 Build and publish it in the customer supply chain, then deploy by digest with
 Helm `bootstrap.mode=preinstalled`. No credential, pool ID, registry token, or
