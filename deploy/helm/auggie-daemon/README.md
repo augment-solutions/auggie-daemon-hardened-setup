@@ -26,7 +26,7 @@ Kubernetes expands `$(POD_NAME)` from the downward API without a shell.
 
 ## Prerequisites
 
-- Kubernetes 1.25+ and Helm 3.
+- Kubernetes 1.25+ and Helm 3.16.0 or newer.
 - A private Rocky Linux 8-compatible image accessible to the cluster.
 - For GKE Secret Manager: enable the Secret Manager managed add-on and grant
   the KSA principal access to the referenced secret versions.
@@ -102,9 +102,17 @@ The chart never creates the Secret and never accepts its content in values.
 Set `bootstrap.auggieVersion` to an exact version in the supported
 `>=0.32.0 <0.37.0` range. In `bootstrapImage` and `preinstalled` modes, it must
 match the version in the supplied image; startup fails if its runtime manifest
-or package metadata differs. `bootstrapImage.repository` is
-mandatory in that mode. Build and scan this image inside the customer supply
-chain; there is no chart default.
+or package metadata differs. `bootstrapImage.repository` is mandatory in that
+mode. Build and scan this image inside the customer supply chain; there is no
+chart default.
+
+### Upgrade from chart 0.1.x
+
+Chart 0.2.x defaults `bootstrap.auggieVersion` to `0.36.0` and verifies image
+contents. Before upgrading with a 0.32.0 bootstrap or preinstalled image, either
+rebuild that image with Auggie 0.36.0 or explicitly preserve
+`bootstrap.auggieVersion: "0.32.0"`. An image/value mismatch intentionally
+blocks pod startup.
 
 ## Workspace modes
 

@@ -126,11 +126,15 @@ bootstrap image as root merely to work around an incorrectly owned volume.
 
 ## Smoke tests
 
-Run the automated Linux container suite before publishing:
+Run the automated Linux container suite before publishing. With one argument,
+the suite validates the version baked into the image:
 
 ```sh
 ./tests/smoke.sh 'registry.example/auggie-bootstrap@sha256:<digest>'
 ```
+
+To assert an expected non-default build version explicitly, pass it as the
+second argument (for example, `./tests/smoke.sh IMAGE 0.34.0`).
 
 It validates fresh and idempotent copy, final preflight, read-only root operation,
 user-owned and Kubernetes-style root-owned/fsGroup-writable volumes, and unsafe

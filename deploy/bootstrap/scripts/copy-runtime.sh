@@ -5,7 +5,8 @@ export LC_ALL
 umask 022
 
 SOURCE_ROOT=/opt/auggie-runtime
-EXPECTED_MARKER="node=${NODE_VERSION:-22.23.1};auggie=${AUGGIE_VERSION:-0.36.0}"
+EXPECTED_NODE_VERSION=${NODE_VERSION:-22.23.1}
+EXPECTED_AUGGIE_VERSION=${AUGGIE_VERSION-}
 lock=
 copy_started=
 
@@ -13,6 +14,9 @@ fail() {
     printf 'copy-runtime: %s\n' "$*" >&2
     exit 1
 }
+
+[ -n "${EXPECTED_AUGGIE_VERSION}" ] || fail "AUGGIE_VERSION is required"
+EXPECTED_MARKER="node=${EXPECTED_NODE_VERSION};auggie=${EXPECTED_AUGGIE_VERSION}"
 
 cleanup() {
     if [ -n "${copy_started}" ]; then
@@ -61,8 +65,9 @@ canonical_parent=$(readlink -f -- "${parent}")
 [ "${canonical_parent}" = "${parent}" ] || fail "destination parent contains a symlink"
 
 if [ -e "${destination}" ] || [ -L "${destination}" ]; then
-    [ -d "${destination}" ] && [ ! -L "${destination}" ] \
-        || fail "destination exists but is not a real directory"
+    if [ ! -d "${destination}" ] || [ -L "${destination}" ]; then
+        fail "destination exists but is not a real directory"
+    fi
     canonical_destination=$(readlink -f -- "${destination}")
     [ "${canonical_destination}" = "${destination}" ] || fail "destination contains a symlink"
 else
@@ -74,7 +79,9 @@ mkdir -- "${lock}" 2>/dev/null || fail "another copy is active or a stale lock e
 marker=${destination}/.bootstrap-complete
 
 if [ -e "${marker}" ] || [ -L "${marker}" ]; then
-    [ -f "${marker}" ] && [ ! -L "${marker}" ] || fail "completion marker is unsafe"
+    if [ ! -f "${marker}" ] || [ -L "${marker}" ]; then
+        fail "completion marker is unsafe"
+    fi
     [ "$(cat -- "${marker}")" = "${EXPECTED_MARKER}" ] || fail "destination contains another runtime version"
     /usr/local/bin/preflight-runtime "${destination}"
     exit 0

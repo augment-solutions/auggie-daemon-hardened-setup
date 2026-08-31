@@ -4,7 +4,14 @@
 set -eu
 
 IMAGE=${1:?usage: smoke.sh IMAGE [AUGGIE_VERSION]}
-AUGGIE_VERSION=${2:-0.36.0}
+[ "$#" -le 2 ] || { printf 'usage: smoke.sh IMAGE [AUGGIE_VERSION]\n' >&2; exit 1; }
+VERSION_OVERRIDE_SET=0
+AUGGIE_VERSION=
+if [ "$#" -eq 2 ]; then
+    [ -n "$2" ] || { printf 'AUGGIE_VERSION must not be empty\n' >&2; exit 1; }
+    VERSION_OVERRIDE_SET=1
+    AUGGIE_VERSION=$2
+fi
 case_number=0
 volumes=
 
@@ -15,6 +22,20 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+run_runtime_container() {
+    volume=$1
+    body=$2
+    set -- docker run --rm --read-only --user 1000:1000
+    if [ "${VERSION_OVERRIDE_SET}" -eq 1 ]; then
+        set -- "$@" --env "AUGGIE_VERSION=${AUGGIE_VERSION}"
+    fi
+    set -- "$@" \
+        --volume "${volume}:/runtime" \
+        --tmpfs /tmp:rw,uid=1000,gid=1000,mode=1770 \
+        --entrypoint /bin/sh "${IMAGE}" -ceu "${body}"
+    "$@"
+}
+
 run_case() {
     case_number=$((case_number + 1))
     volume="auggie-bootstrap-smoke-$$-${case_number}"
@@ -23,11 +44,7 @@ run_case() {
     docker run --rm --user 0:0 --volume "${volume}:/runtime" \
         --entrypoint /bin/sh "${IMAGE}" -ceu \
         'chown 1000:1000 /runtime; chmod 0770 /runtime'
-    docker run --rm --read-only --user 1000:1000 \
-        --env "AUGGIE_VERSION=${AUGGIE_VERSION}" \
-        --volume "${volume}:/runtime" \
-        --tmpfs /tmp:rw,uid=1000,gid=1000,mode=1770 \
-        --entrypoint /bin/sh "${IMAGE}" -ceu "$1"
+    run_runtime_container "${volume}" "$1"
     docker volume rm "${volume}" >/dev/null
 }
 
@@ -39,14 +56,10 @@ run_fs_group_case() {
     docker run --rm --user 0:0 --volume "${volume}:/runtime" \
         --entrypoint /bin/sh "${IMAGE}" -ceu \
         'chown 0:1000 /runtime; chmod 2770 /runtime'
-    docker run --rm --read-only --user 1000:1000 \
-        --env "AUGGIE_VERSION=${AUGGIE_VERSION}" \
-        --volume "${volume}:/runtime" \
-        --tmpfs /tmp:rw,uid=1000,gid=1000,mode=1770 \
-        --entrypoint /bin/sh "${IMAGE}" -ceu '
-            /usr/local/bin/copy-runtime /runtime
-            /usr/local/bin/preflight-runtime /runtime
-        '
+    run_runtime_container "${volume}" '
+        /usr/local/bin/copy-runtime /runtime
+        /usr/local/bin/preflight-runtime /runtime
+    '
     docker volume rm "${volume}" >/dev/null
 }
 
