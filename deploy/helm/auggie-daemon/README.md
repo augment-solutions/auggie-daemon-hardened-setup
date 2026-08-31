@@ -97,11 +97,12 @@ The chart never creates the Secret and never accepts its content in values.
 |---|---|---|
 | `runtimeNpm` | Installs the exact `bootstrap.auggieVersion` into an `emptyDir` | Workload image includes Node, npm, and required OS libraries |
 | `bootstrapImage` | Its verified copy entrypoint places pinned Node and Auggie trees into an `emptyDir` | Supply a private image built from `deploy/bootstrap`; customer image needs Rocky 8-compatible glibc and normal CLI prerequisites such as Git/CA roots |
-| `preinstalled` | Runs `auggie` from the workload image `PATH` | Workload image already contains the configured Auggie version |
+| `preinstalled` | Verifies the configured version, then runs `auggie` from the workload image `PATH` | Workload image contains the runtime at `bootstrap.runtimeMountPath` and `/usr/local/bin/preflight-runtime` |
 
 Set `bootstrap.auggieVersion` to an exact version in the supported
 `>=0.32.0 <0.37.0` range. In `bootstrapImage` and `preinstalled` modes, it must
-match the version in the supplied image. `bootstrapImage.repository` is
+match the version in the supplied image; startup fails if its runtime manifest
+or package metadata differs. `bootstrapImage.repository` is
 mandatory in that mode. Build and scan this image inside the customer supply
 chain; there is no chart default.
 

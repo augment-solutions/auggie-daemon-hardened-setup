@@ -119,7 +119,7 @@ auggie
 {{- if or (eq .Values.workspace.mountPath "/tmp") (eq .Values.credentials.mountPath "/tmp") (eq .Values.home.mountPath "/tmp") -}}
 {{- fail "workspace.mountPath, credentials.mountPath, and home.mountPath must not be /tmp" -}}
 {{- end -}}
-{{- if and (ne .Values.bootstrap.mode "preinstalled") (or (eq .Values.bootstrap.runtimeMountPath .Values.workspace.mountPath) (eq .Values.bootstrap.runtimeMountPath .Values.credentials.mountPath) (eq .Values.bootstrap.runtimeMountPath .Values.home.mountPath) (eq .Values.bootstrap.runtimeMountPath "/tmp")) -}}
+{{- if or (eq .Values.bootstrap.runtimeMountPath .Values.workspace.mountPath) (eq .Values.bootstrap.runtimeMountPath .Values.credentials.mountPath) (eq .Values.bootstrap.runtimeMountPath .Values.home.mountPath) (eq .Values.bootstrap.runtimeMountPath "/tmp") -}}
 {{- fail "bootstrap.runtimeMountPath must not overlap another explicit mount path" -}}
 {{- end -}}
 {{- if hasKey .Values.podAnnotations "checksum/config" -}}

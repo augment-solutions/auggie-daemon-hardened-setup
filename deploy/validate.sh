@@ -47,6 +47,11 @@ render runtime-npm-0-35 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVe
 render runtime-npm-0-36 --set bootstrap.mode=runtimeNpm --set bootstrap.auggieVersion=0.36.0
 render preinstalled --set bootstrap.mode=preinstalled
 
+grep -Fq 'name: AUGGIE_VERSION' "${TMP}/gke-standard.yaml"
+grep -Fq 'name: verify-auggie-runtime' "${TMP}/preinstalled.yaml"
+grep -Fq '/usr/local/bin/preflight-runtime' "${TMP}/preinstalled.yaml"
+grep -Fq 'value: "0.36.0"' "${TMP}/preinstalled.yaml"
+
 if helm template invalid "${CHART}" -f "${EXAMPLE}" --set image.tag=latest \
   >"${TMP}/invalid.out" 2>"${TMP}/invalid.err"; then
   printf 'ERROR: mutable latest image was accepted\n' >&2; exit 1

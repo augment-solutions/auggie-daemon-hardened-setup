@@ -102,9 +102,11 @@ daemon registration alone is insufficient.
 
 The chart passed Helm 3.21.4 lint and render checks with Auggie `0.32.0`,
 `0.33.7`, `0.34.0`, `0.35.4`, `0.36.0`, and `0.36.12`; it rejected `0.31.99`
-and `0.37.0`. A clean npm-prefix install of `@augmentcode/auggie@0.36.0` passed its
-package-version assertion and `auggie --version` smoke test. This was local
-compatibility validation, not a repeat of the live GKE qualification below.
+and `0.37.0`. A clean npm-prefix install of `@augmentcode/auggie@0.36.0` passed
+its package-version assertion and `auggie --version` smoke test. Image-mode
+renders pass the configured version into preflight, which accepted `0.36.0` and
+rejected a mismatched version. This was local compatibility validation, not a
+repeat of the live GKE qualification below.
 
 ## Sanitized live run: 2026-07-12
 
