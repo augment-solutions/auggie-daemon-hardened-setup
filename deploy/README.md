@@ -30,7 +30,7 @@ outbound connection to the configured Augment daemon pool.
 
 ## Rocky Linux 8 image contract
 
-The recommended `bootstrapImage` mode supplies pinned Node 22 and Auggie 0.32.0
+The recommended `bootstrapImage` mode supplies pinned Node 22 and Auggie 0.34.0
 without changing the customer's image. The customer container needs compatible
 Rocky 8 glibc, `/usr/bin/env`, trusted CA roots, Git, and any tools its sessions
 use. It must allow the configured numeric non-root UID to read the image and

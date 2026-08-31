@@ -98,6 +98,14 @@ a non-secret agreed marker under `/workspace`. Verify the exact marker from the
 pod and remove it. This proves the complete control-plane-to-workspace path;
 daemon registration alone is insufficient.
 
+## Auggie 0.34.0 compatibility validation: 2026-08-31
+
+The chart passed Helm 3.21.4 lint and render checks with Auggie `0.32.0`,
+`0.33.7`, `0.34.0`, and `0.34.12`; it rejected `0.31.99` and `0.35.0`.
+A clean npm-prefix install of `@augmentcode/auggie@0.34.0` also passed its
+package-version assertion and `auggie --version` smoke test. This was local
+compatibility validation, not a repeat of the live GKE qualification below.
+
 ## Sanitized live run: 2026-07-12
 
 Environment: GKE Autopilot 1.35, private nodes, dedicated VPC/subnet/NAT,

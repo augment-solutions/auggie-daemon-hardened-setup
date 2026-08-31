@@ -1,17 +1,19 @@
 # syntax=docker/dockerfile:1.7
 
 ARG ROCKY_BASE_IMAGE
+ARG AUGGIE_VERSION=0.34.0
 
 FROM ${ROCKY_BASE_IMAGE} AS builder
 
 ARG ROCKY_BASE_IMAGE
+ARG AUGGIE_VERSION
 ARG TARGETARCH
 ARG NODE_SHA256_AMD64
 ARG NODE_SHA256_ARM64
 
 ENV HOME=/home/bootstrap \
     NODE_VERSION=22.23.1 \
-    AUGGIE_VERSION=0.32.0
+    AUGGIE_VERSION=${AUGGIE_VERSION}
 
 RUN set -eu; \
     case "${ROCKY_BASE_IMAGE}" in \
@@ -79,9 +81,11 @@ RUN set -eu; \
 
 FROM ${ROCKY_BASE_IMAGE} AS bootstrap
 
+ARG AUGGIE_VERSION
+
 ENV HOME=/tmp \
     NODE_VERSION=22.23.1 \
-    AUGGIE_VERSION=0.32.0
+    AUGGIE_VERSION=${AUGGIE_VERSION}
 
 COPY --from=builder --chown=65532:65532 /work/runtime /opt/auggie-runtime
 COPY scripts/preflight.sh /usr/local/bin/preflight-runtime
@@ -96,7 +100,7 @@ RUN set -eu; \
 
 LABEL org.opencontainers.image.title="Auggie bootstrap runtime" \
       org.opencontainers.image.description="Copies pinned Node 22 and Auggie into a shared volume" \
-      org.opencontainers.image.version="node-22.23.1-auggie-0.32.0"
+      org.opencontainers.image.version="node-22.23.1-auggie-${AUGGIE_VERSION}"
 
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/copy-runtime"]

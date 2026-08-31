@@ -3,7 +3,8 @@
 # shellcheck disable=SC2016
 set -eu
 
-IMAGE=${1:?usage: smoke.sh IMAGE}
+IMAGE=${1:?usage: smoke.sh IMAGE [AUGGIE_VERSION]}
+AUGGIE_VERSION=${2:-0.34.0}
 case_number=0
 volumes=
 
@@ -23,6 +24,7 @@ run_case() {
         --entrypoint /bin/sh "${IMAGE}" -ceu \
         'chown 1000:1000 /runtime; chmod 0770 /runtime'
     docker run --rm --read-only --user 1000:1000 \
+        --env "AUGGIE_VERSION=${AUGGIE_VERSION}" \
         --volume "${volume}:/runtime" \
         --tmpfs /tmp:rw,uid=1000,gid=1000,mode=1770 \
         --entrypoint /bin/sh "${IMAGE}" -ceu "$1"
@@ -38,6 +40,7 @@ run_fs_group_case() {
         --entrypoint /bin/sh "${IMAGE}" -ceu \
         'chown 0:1000 /runtime; chmod 2770 /runtime'
     docker run --rm --read-only --user 1000:1000 \
+        --env "AUGGIE_VERSION=${AUGGIE_VERSION}" \
         --volume "${volume}:/runtime" \
         --tmpfs /tmp:rw,uid=1000,gid=1000,mode=1770 \
         --entrypoint /bin/sh "${IMAGE}" -ceu '
@@ -52,7 +55,7 @@ run_case '
     /usr/local/bin/copy-runtime /runtime
     /usr/local/bin/preflight-runtime /runtime
     test "$(cat /runtime/.bootstrap-complete)" = \
-        "node=22.23.1;auggie=0.32.0"
+        "node=22.23.1;auggie=${AUGGIE_VERSION}"
 '
 
 run_fs_group_case

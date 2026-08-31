@@ -28,7 +28,7 @@ param(
   [int]   $MaxAgents   = -1,   # -1 = prompt; 0 = daemon default (100); N = cap
   [string[]]$ExtraWorkspaces = @(),
   [string]$DaemonName  = "$($env:COMPUTERNAME.ToLower())-bridge-01",
-  [string]$AuggieVersion = "0.32.0",
+  [string]$AuggieVersion = "0.34.0",
   [ValidateSet("","task","service")][string]$RunMode = "",
   [switch]$Uninstall
 )
@@ -104,7 +104,7 @@ function Remove-SensitiveFile([string]$Path) {
 
 Assert-SafeServiceUser $SvcUser
 if ($DaemonName -notmatch '^[A-Za-z0-9._-]{1,128}$') { throw "DaemonName must use only letters, numbers, dot, underscore, and hyphen." }
-if ($AuggieVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$') { throw "AuggieVersion must be an exact version, such as 0.32.0." }
+if ($AuggieVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$') { throw "AuggieVersion must be an exact version, such as 0.34.0." }
 $Root = Assert-SafeRoot $Root
 $TaskName  = "AuggieDaemon"
 $Workspace = Join-Path $Root "workspace"

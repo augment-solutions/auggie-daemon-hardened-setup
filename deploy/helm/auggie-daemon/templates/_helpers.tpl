@@ -92,8 +92,8 @@ auggie
 {{- if not (has .Values.bootstrap.mode (list "bootstrapImage" "runtimeNpm" "preinstalled")) -}}
 {{- fail "bootstrap.mode must be bootstrapImage, runtimeNpm, or preinstalled" -}}
 {{- end -}}
-{{- if ne .Values.bootstrap.auggieVersion "0.32.0" -}}
-{{- fail "bootstrap.auggieVersion must be exactly 0.32.0 for this chart release" -}}
+{{- if not (semverCompare ">=0.32.0 <0.35.0" .Values.bootstrap.auggieVersion) -}}
+{{- fail "bootstrap.auggieVersion must be >=0.32.0 and <0.35.0" -}}
 {{- end -}}
 {{- if eq .Values.bootstrap.mode "bootstrapImage" -}}
 {{- include "auggie-daemon.bootstrapImage" . -}}

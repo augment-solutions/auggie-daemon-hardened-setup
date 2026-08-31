@@ -11,7 +11,7 @@ daemon:
 
 bootstrap:
   mode: bootstrapImage
-  auggieVersion: "0.32.0"
+  auggieVersion: "0.34.0"
   bootstrapImage:
     repository: us-central1-docker.pkg.dev/MY_PROJECT/augment/auggie-bootstrap
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000 # replace
